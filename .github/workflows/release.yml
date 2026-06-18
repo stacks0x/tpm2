@@ -97,6 +97,8 @@ jobs:
           done
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - name: Verify native loader is present
+        run: test -f native.cjs && test -f native.d.ts
       - name: Sync optionalDependencies for main package
         run: npm run prepublishOnly
       - name: Publish node-tpm2

@@ -37,8 +37,7 @@ bower_components
 # Rust / napi-rs
 /target/
 *.node
-native.cjs
-native.d.ts
+# native.cjs + native.d.ts are committed: the main package loader must ship on npm.
 
 
 # Dependency directories

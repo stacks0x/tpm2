@@ -6,20 +6,18 @@ Native TPM 2.0 for Node. Zero tooling, no admin.
 - Direct TBS command marshalling — no tpm2-tss, no tpm2-tools at install or runtime.
 - Ships as prebuilt native binaries via napi-rs platform packages.
 
-> **Status: pre-release (`0.0.1` on npm).** `Tpm.isAvailable()` and `Tpm.info()` work on
-> Windows and Linux. `Tpm.open()` and attestation methods are not implemented yet.
+> **Status: pre-release.** `Tpm.isAvailable()` and `Tpm.info()` work on Windows and Linux.
+> `Tpm.open()` and attestation methods are not implemented yet.
 
 
-## Install (once platform packages are published)
+## Install
 
 ```bash
 npm install node-tpm2
 ```
 
-npm resolves exactly one native binary from `optionalDependencies` — no build step, no
-tpm2-tools, no PATH edits. The main `node-tpm2@0.0.1` package is already on npm; platform
-packages (`node-tpm2-linux-x64-gnu`, etc.) must be published for install-without-tooling to
-work end-to-end.
+npm resolves exactly one prebuilt native binary from `optionalDependencies` — no build step,
+no tpm2-tools, no Rust. Requires platform packages published for your OS.
 
 ## Development
 

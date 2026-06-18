@@ -6,6 +6,7 @@ use crate::tbs::wire::{
 };
 
 const TPM_ST_NO_SESSIONS: u16 = 0x8001;
+const TPM_ST_SESSIONS: u16 = 0x8002;
 const TPM_CC_CREATE_PRIMARY: u32 = 0x0000_0131;
 const TPM_CC_FLUSH_CONTEXT: u32 = 0x0000_0165;
 const TPM_CC_GET_RANDOM: u32 = 0x0000_017B;
@@ -48,16 +49,47 @@ pub fn flush_context(handle: u32) -> Vec<u8> {
     command(TPM_ST_NO_SESSIONS, TPM_CC_FLUSH_CONTEXT, &u32(handle))
 }
 
-/// Handle field from a successful CreatePrimary response.
-pub fn object_handle_from_response(resp: &[u8]) -> Option<u32> {
+/// Offset of the first `UINT32` parameter (e.g. `objectHandle`) in a TPM response.
+fn response_parameter_offset(resp: &[u8]) -> Option<usize> {
     if resp.len() < 14 {
         return None;
     }
+    let tag = u16::from_be_bytes([resp[0], resp[1]]);
+    match tag {
+        TPM_ST_NO_SESSIONS => Some(10),
+        TPM_ST_SESSIONS => {
+            let param_size = u32::from_be_bytes([resp[10], resp[11], resp[12], resp[13]]);
+            // TPM_ST_SESSIONS responses include `parameterSize` at offset 10. swtpm/fTPM
+            // sometimes omit it and place `objectHandle` there instead (0x80xxxxxx).
+            if param_size > 0
+                && param_size < 0x8000_0000
+                && resp.len() >= 14 + param_size as usize
+            {
+                Some(14)
+            } else {
+                Some(10)
+            }
+        }
+        _ => Some(10),
+    }
+}
+
+/// Handle field from a successful CreatePrimary response.
+pub fn object_handle_from_response(resp: &[u8]) -> Option<u32> {
     let rc = tpm_rc_from_response(resp)?;
     if rc != 0 {
         return None;
     }
-    Some(u32::from_be_bytes([resp[10], resp[11], resp[12], resp[13]]))
+    let offset = response_parameter_offset(resp)?;
+    if resp.len() < offset + 4 {
+        return None;
+    }
+    Some(u32::from_be_bytes([
+        resp[offset],
+        resp[offset + 1],
+        resp[offset + 2],
+        resp[offset + 3],
+    ]))
 }
 
 /// TPM2_GetRandom(8)
@@ -207,5 +239,44 @@ mod tests {
         assert!(is_transient_object_handle(0x80FF_FFFF));
         assert!(!is_transient_object_handle(0x8100_0001)); // persistent
         assert!(!is_transient_object_handle(0x4000_0001)); // owner hierarchy
+    }
+
+    /// swtpm-style TPM_ST_SESSIONS response: no `parameterSize` prefix; handle at offset 10.
+    #[test]
+    fn object_handle_from_sessions_response_swtpm_layout() {
+        let mut resp = vec![0u8; 32];
+        resp[0..2].copy_from_slice(&[0x80, 0x02]); // TPM_ST_SESSIONS
+        resp[2..6].copy_from_slice(&32u32.to_be_bytes());
+        resp[6..10].copy_from_slice(&0u32.to_be_bytes()); // TPM_RC_SUCCESS
+        resp[10..14].copy_from_slice(&0x80FF_FFFFu32.to_be_bytes()); // objectHandle
+        resp[14..16].copy_from_slice(&0x0000u16.to_be_bytes()); // outPublic.size (truncated)
+        assert_eq!(
+            object_handle_from_response(&resp),
+            Some(0x80FF_FFFF)
+        );
+    }
+
+    /// fTPM-style TPM_ST_SESSIONS response: `parameterSize` at 10, handle at 14.
+    #[test]
+    fn object_handle_from_sessions_response_with_parameter_size() {
+        let param_size = 20u32;
+        let total = 14 + param_size as usize;
+        let mut resp = vec![0u8; total];
+        resp[0..2].copy_from_slice(&[0x80, 0x02]);
+        resp[2..6].copy_from_slice(&(total as u32).to_be_bytes());
+        resp[6..10].copy_from_slice(&0u32.to_be_bytes());
+        resp[10..14].copy_from_slice(&param_size.to_be_bytes());
+        resp[14..18].copy_from_slice(&0x8000_0001u32.to_be_bytes()); // objectHandle
+        assert_eq!(object_handle_from_response(&resp), Some(0x8000_0001));
+    }
+
+    #[test]
+    fn object_handle_from_no_sessions_response() {
+        let mut resp = vec![0u8; 18];
+        resp[0..2].copy_from_slice(&[0x80, 0x01]);
+        resp[2..6].copy_from_slice(&18u32.to_be_bytes());
+        resp[6..10].copy_from_slice(&0u32.to_be_bytes());
+        resp[10..14].copy_from_slice(&0x8000_00ABu32.to_be_bytes());
+        assert_eq!(object_handle_from_response(&resp), Some(0x8000_00AB));
     }
 }

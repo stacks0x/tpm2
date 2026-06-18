@@ -1,6 +1,7 @@
 //! Windows TBS context + command submission.
 
 use std::ffi::c_void;
+use std::sync::Mutex;
 
 use windows::Win32::System::TpmBaseServices::{
     Tbsi_Context_Create, Tbsip_Context_Close, Tbsip_Submit_Command, TBS_COMMAND_LOCALITY_ZERO,
@@ -59,7 +60,17 @@ impl Drop for TbsContext {
     }
 }
 
+/// One TBS context per process. Transient handles created by `CreatePrimary` are only
+/// visible to the context that loaded them; opening a new context per command breaks
+/// `FlushContext` with `TPM_RC_HANDLE` (0x8B).
+static TBS_CONTEXT: Mutex<Option<TbsContext>> = Mutex::new(None);
+
 pub fn submit_tpm_command(cmd: &[u8]) -> Result<Vec<u8>, String> {
-    let ctx = TbsContext::open()?;
-    ctx.submit(cmd)
+    let mut guard = TBS_CONTEXT
+        .lock()
+        .map_err(|e| format!("TBS context lock poisoned: {e}"))?;
+    if guard.is_none() {
+        *guard = Some(TbsContext::open()?);
+    }
+    guard.as_mut().unwrap().submit(cmd)
 }

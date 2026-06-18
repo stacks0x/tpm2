@@ -106,10 +106,12 @@ fn flush_created_transient(handle: u32) -> Result<(), String> {
     let rc = tpm_rc_from_response(&resp).ok_or("short FlushContext response")?;
     if rc == 0 {
         println!("  flushed transient primary 0x{handle:08X}");
-        Ok(())
     } else {
-        Err(format!("FlushContext failed 0x{rc:08X} for handle 0x{handle:08X}"))
+        eprintln!(
+            "  WARN  FlushContext failed 0x{rc:08X} for handle 0x{handle:08X} (transient may leak)"
+        );
     }
+    Ok(())
 }
 
 #[cfg(windows)]

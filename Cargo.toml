@@ -1,0 +1,45 @@
+[package]
+name = "node-tpm2"
+version = "0.0.1"
+edition = "2021"
+description = "Native TPM 2.0 for Node (Rust backend)"
+license = "Apache-2.0"
+repository = "https://github.com/stacks0x/tpm2"
+
+[features]
+default = []
+esapi = ["dep:tss-esapi"]
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "tbs-probe"
+path = "src/bin/tbs-probe.rs"
+
+[[bin]]
+name = "spike"
+path = "src/bin/spike.rs"
+required-features = ["esapi"]
+
+[dependencies]
+napi = { version = "3", default-features = false, features = ["napi9", "async"] }
+napi-derive = "3"
+thiserror = "2"
+tss-esapi = { version = "7.7", optional = true }
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.58", features = [
+  "Win32_System_TpmBaseServices",
+  "Win32_Foundation",
+] }
+
+[build-dependencies]
+napi-build = "2"
+
+[profile.release]
+lto = true
+strip = "symbols"
+
+[profile.dev]
+opt-level = 1

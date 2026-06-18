@@ -1,0 +1,10 @@
+prefix=/usr
+exec_prefix=${prefix}
+libdir=${prefix}/lib/x86_64-linux-gnu
+includedir=${prefix}/include
+
+Name: tss2-sys
+Description: TPM2 Software stack library - SAPI library
+Version: 4.0.1
+Libs: -L${libdir} -ltss2-sys
+Cflags: -I${includedir}

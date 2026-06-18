@@ -34,8 +34,12 @@ bower_components
 # node-waf configuration
 .lock-wscript
 
-# Compiled binary addons (https://nodejs.org/api/addons.html)
-build/Release
+# Rust / napi-rs
+/target/
+*.node
+native.js
+native.d.ts
+
 
 # Dependency directories
 node_modules/

@@ -1,0 +1,40 @@
+{
+  "name": "node-tpm2-win32-arm64-msvc",
+  "version": "0.0.1",
+  "cpu": [
+    "arm64"
+  ],
+  "main": "node-tpm2.win32-arm64-msvc.node",
+  "files": [
+    "node-tpm2.win32-arm64-msvc.node"
+  ],
+  "description": "Native TPM 2.0 for Node. Zero tooling, no admin. Windows (TBS) and Linux (/dev/tpmrm0). Pre-release.",
+  "keywords": [
+    "tpm",
+    "tpm2",
+    "attestation",
+    "tbs",
+    "trusted-platform-module",
+    "security",
+    "native"
+  ],
+  "author": "Matt <support@hardproof.app>",
+  "homepage": "https://github.com/stacks0x/tpm2#readme",
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=20"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/stacks0x/tpm2.git"
+  },
+  "bugs": {
+    "url": "https://github.com/stacks0x/tpm2/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "os": [
+    "win32"
+  ]
+}

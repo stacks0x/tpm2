@@ -37,7 +37,7 @@ bower_components
 # Rust / napi-rs
 /target/
 *.node
-native.js
+native.cjs
 native.d.ts
 
 

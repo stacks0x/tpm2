@@ -37,7 +37,7 @@
     "index.js",
     "index.d.ts",
     "api.js",
-    "native.js",
+    "native.cjs",
     "native.d.ts"
   ],
   "engines": {
@@ -56,8 +56,9 @@
     "access": "public"
   },
   "scripts": {
-    "build": "napi build --platform --release --features esapi --js native.js --dts native.d.ts",
-    "build:debug": "napi build --platform --features esapi --js native.js --dts native.d.ts",
+    "build": "napi build --platform --release --js native.cjs --dts native.d.ts",
+    "build:debug": "napi build --platform --js native.cjs --dts native.d.ts",
+    "build:esapi": "napi build --platform --release --features esapi --js native.cjs --dts native.d.ts",
     "tbs-probe": "cargo run --bin tbs-probe",
     "spike": "cargo run --features esapi --bin spike --",
     "spike:all": "cargo run --features esapi --bin spike -- all",

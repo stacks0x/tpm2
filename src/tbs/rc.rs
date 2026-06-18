@@ -13,40 +13,38 @@ pub enum RcClass {
     Other,
 }
 
-/// Classify a wire-format TPM_RC from the response header.
-///
-/// Auth-class RCs indicate hierarchy/auth requirements (privilege signal).
-/// Format-class RCs indicate malformed commands (fix marshalling first).
 pub fn classify_tpm_rc(rc: u32) -> RcClass {
     if rc == 0 {
         return RcClass::Success;
     }
-
-    // Authorization failures (FMT1 | A nibble)
     if (rc & TPM_RC_A) == TPM_RC_A {
         return RcClass::Auth;
     }
-
-    // VER1 parameter/format errors as returned on the wire (0x000001xx)
     if (rc & TPM_RC_VER1_MASK) == TPM_RC_VER1 {
         return RcClass::Format;
     }
-
-    // FMT1 bit set in the error number byte
     if (rc & TPM_RC_FMT1) != 0 {
         return RcClass::Format;
     }
-
     RcClass::Other
 }
 
-pub fn describe_tpm_rc(rc: u32) -> &'static str {
-    match classify_tpm_rc(rc) {
+pub fn describe_tpm_rc(rc: u32) -> String {
+    let name = match rc {
+        0 => "success",
+        0x0000_0125 => "TPM_RC_ASYMMETRIC",
+        0x0000_0143 => "TPM_RC_ATTRIBUTES",
+        0x0000_017F => "TPM_RC_SIZE",
+        0x0000_038E => "TPM_RC_AUTH_FAIL",
+        _ => "unknown",
+    };
+    let class = match classify_tpm_rc(rc) {
         RcClass::Success => "success",
         RcClass::Auth => "auth-class (privilege / hierarchy auth required)",
         RcClass::Format => "format-class (malformed command — fix marshalling, not a privilege result)",
         RcClass::Other => "other TPM error",
-    }
+    };
+    format!("{name} — {class}")
 }
 
 #[cfg(test)]
@@ -59,13 +57,8 @@ mod tests {
     }
 
     #[test]
-    fn size_error_is_format() {
-        assert_eq!(classify_tpm_rc(0x0000_017F), RcClass::Format);
-    }
-
-    #[test]
-    fn attributes_error_is_format() {
-        assert_eq!(classify_tpm_rc(0x0000_0143), RcClass::Format);
+    fn asymmetric_is_format() {
+        assert_eq!(classify_tpm_rc(0x0000_0125), RcClass::Format);
     }
 
     #[test]

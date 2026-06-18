@@ -1,9 +1,9 @@
 //! Phase 0 direct-TBS probes (Option B). Zero tss-esapi dependency.
 //!
 //! ```text
-//! cargo run --bin tbs-probe              # all checks
-//! cargo run --bin tbs-probe -- get-random
-//! cargo run --bin tbs-probe -- create-primary
+//! cargo run --bin tbs-probe -- all
+//! cargo run --bin tbs-probe -- create-primary          # RSA (library template)
+//! cargo run --bin tbs-probe -- create-primary-ecc      # ECC variant
 //! ```
 
 #[cfg(not(windows))]
@@ -18,11 +18,12 @@ fn main() {
 
     let result = match cmd.as_str() {
         "get-random" => run_get_random(),
-        "create-primary" => run_create_primary(),
+        "create-primary" => run_create_primary_rsa(),
+        "create-primary-ecc" => run_create_primary_ecc(),
         "all" => run_all(),
         other => {
             eprintln!("unknown command: {other}");
-            eprintln!("usage: tbs-probe [get-random|create-primary|all]");
+            eprintln!("usage: tbs-probe [get-random|create-primary|create-primary-ecc|all]");
             std::process::exit(2);
         }
     };
@@ -36,7 +37,7 @@ fn main() {
 #[cfg(windows)]
 fn run_all() -> Result<(), String> {
     run_get_random()?;
-    run_create_primary()?;
+    run_create_primary_rsa()?;
     println!("\ntbs-probe: all checks passed");
     Ok(())
 }
@@ -52,17 +53,40 @@ fn run_get_random() -> Result<(), String> {
 }
 
 #[cfg(windows)]
-fn run_create_primary() -> Result<(), String> {
+fn run_create_primary_rsa() -> Result<(), String> {
+    use node_tpm2::tbs::commands::{create_primary_owner_rsa_storage, tpm_rc_from_response};
+
+    println!("== create-primary (RSA-2048 storage, owner hierarchy, null auth) ==");
+    run_create_primary_with_cmd("CreatePrimary", &create_primary_owner_rsa_storage(), tpm_rc_from_response)
+}
+
+#[cfg(windows)]
+fn run_create_primary_ecc() -> Result<(), String> {
     use node_tpm2::tbs::commands::{create_primary_owner_ecc_storage, tpm_rc_from_response};
 
-    println!("== create-primary (owner hierarchy, ECC storage, null auth) ==");
-    let cmd = create_primary_owner_ecc_storage();
+    println!("== create-primary-ecc (ECC P256 storage, owner hierarchy, null auth) ==");
+    run_create_primary_with_cmd(
+        "CreatePrimary-ECC",
+        &create_primary_owner_ecc_storage(),
+        tpm_rc_from_response,
+    )
+}
+
+#[cfg(windows)]
+fn run_create_primary_with_cmd<F>(
+    op: &str,
+    cmd: &[u8],
+    parse_rc: F,
+) -> Result<(), String>
+where
+    F: Fn(&[u8]) -> Option<u32>,
+{
     if std::env::var("TBS_PROBE_DEBUG").is_ok() {
-        println!("  command ({} bytes): {}", cmd.len(), hex_preview(&cmd));
+        println!("  command ({} bytes): {}", cmd.len(), hex_preview(cmd));
     }
-    let resp = node_tpm2::tbs::submit_tpm_command(&cmd)?;
-    let rc = tpm_rc_from_response(&resp).ok_or("short TPM response")?;
-    report_tpm_rc("CreatePrimary", rc)?;
+    let resp = node_tpm2::tbs::submit_tpm_command(cmd)?;
+    let rc = parse_rc(&resp).ok_or("short TPM response")?;
+    report_tpm_rc(op, rc)?;
     if rc == 0 && resp.len() >= 14 {
         let handle = u32::from_be_bytes([resp[10], resp[11], resp[12], resp[13]]);
         println!("  primary handle: 0x{handle:08X}");

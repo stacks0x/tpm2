@@ -1,5 +1,6 @@
 pub mod commands;
 pub mod rc;
+pub mod wire;
 
 #[cfg(windows)]
 mod platform;

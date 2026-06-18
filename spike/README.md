@@ -22,9 +22,8 @@ Phase 0 answers two **independent** Windows questions. Linux is harness smoke on
 ```powershell
 # 1. Baseline TBS + owner-hierarchy CreatePrimary (direct TBS, no tpm2-tss)
 cargo run --bin tbs-probe -- all
-# Or individually:
-cargo run --bin tbs-probe -- get-random
-cargo run --bin tbs-probe -- create-primary
+# create-primary uses RSA-2048 storage (matches library template in src/tpm/esapi.rs)
+# create-primary-ecc is available if you want the ECC variant
 
 # Debug marshalling (prints command hex):
 $env:TBS_PROBE_DEBUG=1; cargo run --bin tbs-probe -- create-primary

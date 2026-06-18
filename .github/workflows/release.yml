@@ -1,0 +1,105 @@
+name: Release
+
+env:
+  DEBUG: napi:*
+  APP_NAME: node-tpm2
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  build:
+    name: build ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - host: windows-latest
+            target: x86_64-pc-windows-msvc
+          - host: windows-latest
+            target: aarch64-pc-windows-msvc
+          - host: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - host: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            musl: true
+          - host: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+          - host: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            musl: true
+          - host: macos-latest
+            target: aarch64-apple-darwin
+    runs-on: ${{ matrix.host }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: mlugg/setup-zig@v2
+        if: matrix.musl == true
+        with:
+          version: 0.14.1
+      - uses: taiki-e/install-action@v2
+        if: matrix.musl == true
+        with:
+          tool: cargo-zigbuild
+      - run: npm ci
+      - name: Build native addon
+        run: |
+          if [ "${{ matrix.musl }}" = "true" ]; then
+            npm run build -- --target ${{ matrix.target }} -x
+          else
+            npm run build -- --target ${{ matrix.target }}
+          fi
+        shell: bash
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bindings-${{ matrix.target }}
+          path: |
+            ${{ env.APP_NAME }}.*.node
+          if-no-files-found: error
+
+  publish:
+    name: Publish to npm
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          registry-url: https://registry.npmjs.org
+      - run: npm ci
+      - run: npm run create-npm-dirs
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Stage platform packages
+        run: npm run artifacts
+      - name: List staged packages
+        run: ls -R npm
+      - name: Publish platform packages
+        run: |
+          for dir in npm/*/; do
+            echo "Publishing ${dir}..."
+            (cd "$dir" && npm publish --access public --provenance)
+          done
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - name: Sync optionalDependencies for main package
+        run: npm run prepublishOnly
+      - name: Publish node-tpm2
+        run: npm publish --access public --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

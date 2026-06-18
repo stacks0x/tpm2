@@ -9,7 +9,6 @@ Native TPM 2.0 for Node. Zero tooling, no admin.
 > **Status: pre-release.** `Tpm.isAvailable()` and `Tpm.info()` work on Windows and Linux.
 > `Tpm.open()` and attestation methods are not implemented yet.
 
-
 ## Install
 
 ```bash
@@ -17,7 +16,7 @@ npm install node-tpm2
 ```
 
 npm resolves exactly one prebuilt native binary from `optionalDependencies` — no build step,
-no tpm2-tools, no Rust. Requires platform packages published for your OS.
+no tpm2-tools, no Rust. Requires platform packages published for your OS/arch.
 
 ## Development
 

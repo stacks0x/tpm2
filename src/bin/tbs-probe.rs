@@ -19,12 +19,7 @@ fn main() {
     let result = match cmd.as_str() {
         "get-random" => run_get_random(),
         "create-primary" => run_create_primary(),
-        "all" => {
-            run_get_random()?;
-            run_create_primary()?;
-            println!("\ntbs-probe: all checks passed");
-            Ok(())
-        }
+        "all" => run_all(),
         other => {
             eprintln!("unknown command: {other}");
             eprintln!("usage: tbs-probe [get-random|create-primary|all]");
@@ -36,6 +31,14 @@ fn main() {
         eprintln!("tbs-probe FAILED: {e}");
         std::process::exit(1);
     }
+}
+
+#[cfg(windows)]
+fn run_all() -> Result<(), String> {
+    run_get_random()?;
+    run_create_primary()?;
+    println!("\ntbs-probe: all checks passed");
+    Ok(())
 }
 
 #[cfg(windows)]

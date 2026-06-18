@@ -12,7 +12,8 @@ const TPM_ALG_NULL: u16 = 0x0010;
 const TPM_ECC_NIST_P256: u16 = 0x0003;
 
 // fixedTPM | fixedParent | sensitiveDataOrigin | userWithAuth | restricted | decrypt
-const STORAGE_PRIMARY_ATTRIBUTES: u32 = 0x0003_0066;
+// Matches tpm2-tools raw 0x30072 for `-G ecc -a restricted|decrypt|...`
+const STORAGE_PRIMARY_ATTRIBUTES: u32 = 0x0003_0072;
 
 /// TPM2_GetRandom(8)
 pub fn get_random_8() -> [u8; 12] {
@@ -83,5 +84,20 @@ mod tests {
         let cmd = create_primary_owner_ecc_storage();
         assert_eq!(&cmd[6..10], &TPM_CC_CREATE_PRIMARY.to_be_bytes());
         assert_eq!(&cmd[0..2], &TPM_ST_NO_SESSIONS.to_be_bytes());
+    }
+
+    #[test]
+    fn create_primary_uses_storage_attributes() {
+        let cmd = create_primary_owner_ecc_storage();
+        // objectAttributes in TPMT_PUBLIC (after type + nameAlg)
+        assert_eq!(&cmd[26..30], &STORAGE_PRIMARY_ATTRIBUTES.to_be_bytes());
+    }
+
+    #[test]
+    fn create_primary_command_size() {
+        let cmd = create_primary_owner_ecc_storage();
+        let size = u32::from_be_bytes([cmd[2], cmd[3], cmd[4], cmd[5]]);
+        assert_eq!(size as usize, cmd.len());
+        assert_eq!(size, 54); // 0x36
     }
 }

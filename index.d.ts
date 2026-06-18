@@ -12,10 +12,12 @@ export declare const Tpm: {
     manufacturer: string;
     firmwareVersion: string;
     isVirtual: boolean;
+    spec: string;
   }>;
   info(): Promise<{
     manufacturer: string;
     firmwareVersion: string;
     isVirtual: boolean;
+    spec: string;
   }>;
 };

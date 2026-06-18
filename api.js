@@ -32,7 +32,7 @@ export const Tpm = {
     }
   },
 
-  /** Open a TPM handle. Not implemented until post-spike releases. */
+  /** Open a TPM handle. Not implemented in v0.0.x. */
   async open() {
     if (!native?.isAvailable) {
       throw new TpmError(
@@ -45,8 +45,8 @@ export const Tpm = {
     }
     throw new TpmError(
       'NOT_IMPLEMENTED',
-      'Tpm.open() is not implemented yet; spike phase exposes isAvailable/getFixedProperties only.',
-      'Follow https://github.com/stacks0x/tpm2 for progress.',
+      'Tpm.open() is not implemented yet; v0.0.x exposes isAvailable() and info() only.',
+      'See https://github.com/stacks0x/tpm2 for release progress.',
     );
   },
 

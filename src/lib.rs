@@ -13,6 +13,7 @@ pub struct FixedPropertiesJs {
     pub manufacturer: String,
     pub firmware_version: String,
     pub is_virtual: bool,
+    pub spec: String,
 }
 
 #[napi]
@@ -43,6 +44,7 @@ pub async fn get_fixed_properties() -> Result<FixedPropertiesJs> {
             manufacturer: props.manufacturer,
             firmware_version: props.firmware_version,
             is_virtual: props.is_virtual,
+            spec: props.spec,
         });
     }
     #[allow(unreachable_code)]

@@ -8,6 +8,7 @@ const TPM_ST_NO_SESSIONS: u16 = 0x8001;
 const TPM_CC_GET_CAPABILITY: u32 = 0x0000_017A;
 const TPM_CAP_TPM_PROPERTIES: u32 = 0x0000_0006;
 
+const TPM_PT_FAMILY_INDICATOR: u32 = 0x0000_0100;
 const TPM_PT_MANUFACTURER: u32 = 0x0000_0105;
 const TPM_PT_FIRMWARE_VERSION_1: u32 = 0x0000_010B;
 const TPM_PT_FIRMWARE_VERSION_2: u32 = 0x0000_010C;
@@ -21,6 +22,8 @@ pub struct FixedProperties {
     pub manufacturer: String,
     pub firmware_version: String,
     pub is_virtual: bool,
+    /// TPM 2.0 family indicator from TPM_PT_FAMILY_INDICATOR (typically "2.0").
+    pub spec: String,
 }
 
 pub fn read_fixed_properties() -> Result<FixedProperties, String> {
@@ -45,7 +48,15 @@ pub fn read_fixed_properties() -> Result<FixedProperties, String> {
         ),
         is_virtual: vendor_string(&props).to_ascii_lowercase().contains("swtpm")
             || vendor_string(&props).to_ascii_lowercase().contains("virtual"),
+        spec: format_spec(props.get(&TPM_PT_FAMILY_INDICATOR).copied()),
     })
+}
+
+fn format_spec(value: Option<u32>) -> String {
+    match value {
+        Some(v) if v != 0 => four_cc(v),
+        _ => String::from("unknown"),
+    }
 }
 
 fn parse_tpm_properties(resp: &[u8]) -> Result<std::collections::HashMap<u32, u32>, String> {
@@ -137,5 +148,11 @@ mod tests {
         let props = parse_tpm_properties(&resp).unwrap();
         assert_eq!(props.get(&TPM_PT_MANUFACTURER), Some(&0x4942_4D00));
         assert_eq!(four_cc(0x4942_4D00), "IBM");
+    }
+
+    #[test]
+    fn family_indicator_decodes_as_spec_version() {
+        assert_eq!(format_spec(Some(0x322e_3000)), "2.0");
+        assert_eq!(format_spec(None), "unknown");
     }
 }

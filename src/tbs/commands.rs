@@ -7,6 +7,7 @@ use crate::tbs::wire::{
 
 const TPM_ST_NO_SESSIONS: u16 = 0x8001;
 const TPM_CC_CREATE_PRIMARY: u32 = 0x0000_0131;
+const TPM_CC_FLUSH_CONTEXT: u32 = 0x0000_0165;
 const TPM_CC_GET_RANDOM: u32 = 0x0000_017B;
 const TPM_RH_OWNER: u32 = 0x4000_0001;
 
@@ -31,6 +32,32 @@ impl PrimaryKind {
             PrimaryKind::EccP256 => "ECC P256 storage",
         }
     }
+}
+
+/// TPM_HT_TRANSIENT object handle returned by CreatePrimary (0x80xxxxxx).
+pub fn is_transient_object_handle(handle: u32) -> bool {
+    handle & 0xFF00_0000 == 0x8000_0000
+}
+
+/// TPM2_FlushContext — only safe for transient handles this process just loaded.
+pub fn flush_context(handle: u32) -> Vec<u8> {
+    debug_assert!(
+        is_transient_object_handle(handle),
+        "FlushContext must target a transient object handle, not persistent or permanent handles"
+    );
+    command(TPM_ST_NO_SESSIONS, TPM_CC_FLUSH_CONTEXT, &u32(handle))
+}
+
+/// Handle field from a successful CreatePrimary response.
+pub fn object_handle_from_response(resp: &[u8]) -> Option<u32> {
+    if resp.len() < 14 {
+        return None;
+    }
+    let rc = tpm_rc_from_response(resp)?;
+    if rc != 0 {
+        return None;
+    }
+    Some(u32::from_be_bytes([resp[10], resp[11], resp[12], resp[13]]))
 }
 
 /// TPM2_GetRandom(8)
@@ -163,5 +190,22 @@ mod tests {
         assert_eq!(cmd.len(), 67);
         assert_eq!(&cmd[0..2], &[0x80, 0x02]);
         assert_eq!(&cmd[35..37], &[0x00, 0x01]); // RSA
+    }
+
+    #[test]
+    fn flush_context_golden() {
+        let cmd = flush_context(0x80FF_FFFF);
+        assert_eq!(cmd.len(), 14);
+        assert_eq!(&cmd[0..2], &[0x80, 0x01]);
+        assert_eq!(&cmd[2..6], &[0x00, 0x00, 0x00, 0x0E]);
+        assert_eq!(&cmd[6..10], &[0x00, 0x00, 0x01, 0x65]);
+        assert_eq!(&cmd[10..14], &[0x80, 0xFF, 0xFF, 0xFF]);
+    }
+
+    #[test]
+    fn transient_handle_detection() {
+        assert!(is_transient_object_handle(0x80FF_FFFF));
+        assert!(!is_transient_object_handle(0x8100_0001)); // persistent
+        assert!(!is_transient_object_handle(0x4000_0001)); // owner hierarchy
     }
 }

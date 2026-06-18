@@ -73,10 +73,10 @@ fn run_create_primary() -> Result<(), String> {
 
         match class {
             RcClass::Success => {
-                if resp.len() >= 14 {
-                    let handle = u32::from_be_bytes([resp[10], resp[11], resp[12], resp[13]]);
+                if let Some(handle) = node_tpm2::tbs::commands::object_handle_from_response(&resp) {
                     println!("  PASS  unprivileged CreatePrimary succeeded ({label})");
                     println!("  primary handle: 0x{handle:08X}");
+                    flush_created_transient(handle)?;
                 } else {
                     println!("  PASS  unprivileged CreatePrimary succeeded ({label})");
                 }
@@ -90,6 +90,26 @@ fn run_create_primary() -> Result<(), String> {
     }
 
     Err("CreatePrimary failed for all templates".to_string())
+}
+
+#[cfg(windows)]
+fn flush_created_transient(handle: u32) -> Result<(), String> {
+    use node_tpm2::tbs::commands::{flush_context, is_transient_object_handle, tpm_rc_from_response};
+
+    if !is_transient_object_handle(handle) {
+        return Err(format!(
+            "refusing to flush non-transient handle 0x{handle:08X}"
+        ));
+    }
+
+    let resp = node_tpm2::tbs::submit_tpm_command(&flush_context(handle))?;
+    let rc = tpm_rc_from_response(&resp).ok_or("short FlushContext response")?;
+    if rc == 0 {
+        println!("  flushed transient primary 0x{handle:08X}");
+        Ok(())
+    } else {
+        Err(format!("FlushContext failed 0x{rc:08X} for handle 0x{handle:08X}"))
+    }
 }
 
 #[cfg(windows)]

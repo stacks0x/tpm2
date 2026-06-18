@@ -1,0 +1,3 @@
+# Copy to .npmrc and set your token (or paste token directly into .npmrc).
+# .npmrc is gitignored; this file is the template.
+//registry.npmjs.org/:_authToken=npm_xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx

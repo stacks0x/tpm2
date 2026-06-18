@@ -26,7 +26,12 @@ cargo run --bin tbs-probe -- all
 
 CreatePrimary uses owner-hierarchy **password session** auth (null password) and ECC P256
 storage template. On success the probe **flushes the transient primary** it created
-(`FlushContext` on `0x80xxxxxx` only).
+(`FlushContext` / `GetCapability handles-transient` fallback on `0x80xxxxxx` only).
+
+**Transient handle note:** swtpm returns `0x80FFFFFF` as the loaded transient slot. That is
+the real handle (confirmed via `GetCapability handles-transient`), not a parse error.
+`FlushContext` uses command code `0x165` (`00 00 01 65`). Windows TBS requires reusing one
+`Tbsi_Context_Create` per process — a new context per command yields `TPM_RC_HANDLE` on flush.
 
 ```powershell
 # Option A feasibility (expected FAIL on Windows — closed)

@@ -6,11 +6,17 @@ use crate::tbs::wire::{
 };
 
 const TPM_ST_NO_SESSIONS: u16 = 0x8001;
+#[allow(dead_code)]
 const TPM_ST_SESSIONS: u16 = 0x8002;
 const TPM_CC_CREATE_PRIMARY: u32 = 0x0000_0131;
 const TPM_CC_FLUSH_CONTEXT: u32 = 0x0000_0165;
+const TPM_CC_GET_CAPABILITY: u32 = 0x0000_017A;
 const TPM_CC_GET_RANDOM: u32 = 0x0000_017B;
 const TPM_RH_OWNER: u32 = 0x4000_0001;
+
+const TPM_CAP_HANDLES: u32 = 0x0000_0001;
+/// First transient-object handle (`TPM_HT_TRANSIENT << 24`).
+const TPM_HT_TRANSIENT: u32 = 0x8000_0000;
 
 const TPM_ALG_RSA: u16 = 0x0001;
 const TPM_ALG_ECC: u16 = 0x0023;
@@ -49,47 +55,63 @@ pub fn flush_context(handle: u32) -> Vec<u8> {
     command(TPM_ST_NO_SESSIONS, TPM_CC_FLUSH_CONTEXT, &u32(handle))
 }
 
-/// Offset of the first `UINT32` parameter (e.g. `objectHandle`) in a TPM response.
-fn response_parameter_offset(resp: &[u8]) -> Option<usize> {
-    if resp.len() < 14 {
-        return None;
-    }
-    let tag = u16::from_be_bytes([resp[0], resp[1]]);
-    match tag {
-        TPM_ST_NO_SESSIONS => Some(10),
-        TPM_ST_SESSIONS => {
-            let param_size = u32::from_be_bytes([resp[10], resp[11], resp[12], resp[13]]);
-            // TPM_ST_SESSIONS responses include `parameterSize` at offset 10. swtpm/fTPM
-            // sometimes omit it and place `objectHandle` there instead (0x80xxxxxx).
-            if param_size > 0
-                && param_size < 0x8000_0000
-                && resp.len() >= 14 + param_size as usize
-            {
-                Some(14)
-            } else {
-                Some(10)
-            }
-        }
-        _ => Some(10),
-    }
+/// TPM2_GetCapability for loaded transient object handles.
+pub fn get_capability_transient_handles() -> Vec<u8> {
+    let mut body = Vec::new();
+    body.extend_from_slice(&u32(TPM_CAP_HANDLES));
+    body.extend_from_slice(&u32(TPM_HT_TRANSIENT));
+    body.extend_from_slice(&u32(0xFFFF_FFFF)); // return as many as the TPM allows
+    command(TPM_ST_NO_SESSIONS, TPM_CC_GET_CAPABILITY, &body)
 }
 
 /// Handle field from a successful CreatePrimary response.
+///
+/// For both `TPM_ST_NO_SESSIONS` and `TPM_ST_SESSIONS` responses, `objectHandle` is the
+/// first parameter at offset 10 (after tag, size, and response code). Verified on Linux
+/// swtpm: bytes 10–13 are `0x80FFFFFF`, matching `GetCapability handles-transient`.
 pub fn object_handle_from_response(resp: &[u8]) -> Option<u32> {
+    if resp.len() < 14 {
+        return None;
+    }
     let rc = tpm_rc_from_response(resp)?;
     if rc != 0 {
         return None;
     }
-    let offset = response_parameter_offset(resp)?;
-    if resp.len() < offset + 4 {
+    Some(u32::from_be_bytes([resp[10], resp[11], resp[12], resp[13]]))
+}
+
+/// Transient object handles from a successful `GetCapability(TPM_CAP_HANDLES)` response.
+pub fn transient_handles_from_getcap(resp: &[u8]) -> Option<Vec<u32>> {
+    let rc = tpm_rc_from_response(resp)?;
+    if rc != 0 {
         return None;
     }
-    Some(u32::from_be_bytes([
-        resp[offset],
-        resp[offset + 1],
-        resp[offset + 2],
-        resp[offset + 3],
-    ]))
+    if resp.len() < 19 {
+        return None;
+    }
+    let capability = u32::from_be_bytes([resp[11], resp[12], resp[13], resp[14]]);
+    if capability != TPM_CAP_HANDLES {
+        return None;
+    }
+    let count = u32::from_be_bytes([resp[15], resp[16], resp[17], resp[18]]) as usize;
+    let mut handles = Vec::with_capacity(count);
+    let mut offset = 19;
+    for _ in 0..count {
+        if offset + 4 > resp.len() {
+            break;
+        }
+        let handle = u32::from_be_bytes([
+            resp[offset],
+            resp[offset + 1],
+            resp[offset + 2],
+            resp[offset + 3],
+        ]);
+        if is_transient_object_handle(handle) {
+            handles.push(handle);
+        }
+        offset += 4;
+    }
+    Some(handles)
 }
 
 /// TPM2_GetRandom(8)
@@ -180,6 +202,7 @@ pub fn tpm_rc_name(rc: u32) -> &'static str {
         0x0000_0125 => "TPM_RC_ASYMMETRIC",
         0x0000_0143 => "TPM_RC_ATTRIBUTES",
         0x0000_017F => "TPM_RC_SIZE",
+        0x0000_018B => "TPM_RC_HANDLE",
         0x0000_038E => "TPM_RC_AUTH_FAIL",
         _ => "unknown",
     }
@@ -241,33 +264,49 @@ mod tests {
         assert!(!is_transient_object_handle(0x4000_0001)); // owner hierarchy
     }
 
-    /// swtpm-style TPM_ST_SESSIONS response: no `parameterSize` prefix; handle at offset 10.
+    /// Linux swtpm golden: TPM_ST_SESSIONS CreatePrimary, objectHandle at offset 10.
     #[test]
-    fn object_handle_from_sessions_response_swtpm_layout() {
+    fn object_handle_from_linux_create_primary_golden() {
+        let golden: [u8; 50] = [
+            0x80, 0x02, 0x00, 0x00, 0x01, 0x2a, 0x00, 0x00, 0x00, 0x00, 0x80, 0xff, 0xff, 0xff,
+            0x00, 0x00, 0x01, 0x13, 0x00, 0x5a, 0x00, 0x23, 0x00, 0x0b, 0x00, 0x03, 0x00, 0x72,
+            0x00, 0x00, 0x00, 0x06, 0x00, 0x80, 0x00, 0x43, 0x00, 0x10, 0x00, 0x03, 0x00, 0x10,
+            0x00, 0x20, 0x86, 0x4d, 0xb7, 0xb8, 0x38, 0x47,
+        ];
+        assert_eq!(object_handle_from_response(&golden), Some(0x80FF_FFFF));
+        assert_eq!(u16::from_be_bytes([golden[0], golden[1]]), TPM_ST_SESSIONS);
+    }
+
+    #[test]
+    fn object_handle_from_sessions_response() {
         let mut resp = vec![0u8; 32];
-        resp[0..2].copy_from_slice(&[0x80, 0x02]); // TPM_ST_SESSIONS
+        resp[0..2].copy_from_slice(&[0x80, 0x02]);
         resp[2..6].copy_from_slice(&32u32.to_be_bytes());
-        resp[6..10].copy_from_slice(&0u32.to_be_bytes()); // TPM_RC_SUCCESS
-        resp[10..14].copy_from_slice(&0x80FF_FFFFu32.to_be_bytes()); // objectHandle
-        resp[14..16].copy_from_slice(&0x0000u16.to_be_bytes()); // outPublic.size (truncated)
+        resp[6..10].copy_from_slice(&0u32.to_be_bytes());
+        resp[10..14].copy_from_slice(&0x80FF_FFFFu32.to_be_bytes());
+        assert_eq!(object_handle_from_response(&resp), Some(0x80FF_FFFF));
+    }
+
+    #[test]
+    fn transient_handles_from_getcap_golden() {
+        let resp: [u8; 23] = [
+            0x80, 0x01, 0x00, 0x00, 0x00, 0x17, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x01, 0x00, 0x00, 0x00, 0x01, 0x80, 0xff, 0xff, 0xff,
+        ];
         assert_eq!(
-            object_handle_from_response(&resp),
-            Some(0x80FF_FFFF)
+            transient_handles_from_getcap(&resp),
+            Some(vec![0x80FF_FFFF])
         );
     }
 
-    /// fTPM-style TPM_ST_SESSIONS response: `parameterSize` at 10, handle at 14.
     #[test]
-    fn object_handle_from_sessions_response_with_parameter_size() {
-        let param_size = 20u32;
-        let total = 14 + param_size as usize;
-        let mut resp = vec![0u8; total];
-        resp[0..2].copy_from_slice(&[0x80, 0x02]);
-        resp[2..6].copy_from_slice(&(total as u32).to_be_bytes());
-        resp[6..10].copy_from_slice(&0u32.to_be_bytes());
-        resp[10..14].copy_from_slice(&param_size.to_be_bytes());
-        resp[14..18].copy_from_slice(&0x8000_0001u32.to_be_bytes()); // objectHandle
-        assert_eq!(object_handle_from_response(&resp), Some(0x8000_0001));
+    fn get_capability_transient_handles_golden() {
+        let cmd = get_capability_transient_handles();
+        assert_eq!(cmd.len(), 22);
+        assert_eq!(&cmd[0..2], &[0x80, 0x01]);
+        assert_eq!(&cmd[6..10], &[0x00, 0x00, 0x01, 0x7A]);
+        assert_eq!(&cmd[10..14], &[0x00, 0x00, 0x00, 0x01]);
+        assert_eq!(&cmd[14..18], &[0x80, 0x00, 0x00, 0x00]);
     }
 
     #[test]
@@ -278,5 +317,46 @@ mod tests {
         resp[6..10].copy_from_slice(&0u32.to_be_bytes());
         resp[10..14].copy_from_slice(&0x8000_00ABu32.to_be_bytes());
         assert_eq!(object_handle_from_response(&resp), Some(0x8000_00AB));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_create_primary_flush_roundtrip() {
+        use std::path::Path;
+
+        use crate::tbs::submit_tpm_command;
+
+        if !Path::new("/dev/tpmrm0").exists() {
+            return;
+        }
+
+        let cmd = create_primary_owner(PrimaryKind::EccP256);
+        let resp = submit_tpm_command(&cmd).expect("CreatePrimary");
+        let rc = tpm_rc_from_response(&resp).expect("rc");
+        assert_eq!(rc, 0, "CreatePrimary failed 0x{rc:08X}");
+
+        let handle = object_handle_from_response(&resp).expect("objectHandle");
+        assert!(
+            is_transient_object_handle(handle),
+            "expected transient handle, got 0x{handle:08X}"
+        );
+
+        let cap = submit_tpm_command(&get_capability_transient_handles()).expect("GetCapability");
+        let listed = transient_handles_from_getcap(&cap).unwrap_or_default();
+        assert!(
+            listed.contains(&handle),
+            "GetCapability should list 0x{handle:08X}, got {listed:?}"
+        );
+
+        let flush_resp = submit_tpm_command(&flush_context(handle)).expect("FlushContext");
+        let flush_rc = tpm_rc_from_response(&flush_resp).expect("flush rc");
+        assert_eq!(flush_rc, 0, "FlushContext failed 0x{flush_rc:08X}");
+
+        let cap_after = submit_tpm_command(&get_capability_transient_handles()).expect("GetCapability");
+        let remaining = transient_handles_from_getcap(&cap_after).unwrap_or_default();
+        assert!(
+            !remaining.contains(&handle),
+            "handle 0x{handle:08X} still loaded after flush: {remaining:?}"
+        );
     }
 }

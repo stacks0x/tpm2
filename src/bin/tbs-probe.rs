@@ -94,7 +94,10 @@ fn run_create_primary() -> Result<(), String> {
 
 #[cfg(windows)]
 fn flush_created_transient(handle: u32) -> Result<(), String> {
-    use node_tpm2::tbs::commands::{flush_context, is_transient_object_handle, tpm_rc_from_response};
+    use node_tpm2::tbs::commands::{
+        flush_context, get_capability_transient_handles, is_transient_object_handle,
+        transient_handles_from_getcap, tpm_rc_from_response,
+    };
 
     if !is_transient_object_handle(handle) {
         return Err(format!(
@@ -102,16 +105,40 @@ fn flush_created_transient(handle: u32) -> Result<(), String> {
         ));
     }
 
-    let resp = node_tpm2::tbs::submit_tpm_command(&flush_context(handle))?;
-    let rc = tpm_rc_from_response(&resp).ok_or("short FlushContext response")?;
-    if rc == 0 {
+    let mut flushed = try_flush_handle(handle)?;
+
+    if !flushed {
+        // Fallback: flush every transient handle the TPM reports (same TBS context).
+        if let Ok(cap_resp) = node_tpm2::tbs::submit_tpm_command(&get_capability_transient_handles())
+        {
+            if let Some(handles) = transient_handles_from_getcap(&cap_resp) {
+                for h in handles {
+                    if h == handle || is_transient_object_handle(h) {
+                        flushed |= try_flush_handle(h)?;
+                    }
+                }
+            }
+        }
+    }
+
+    if flushed {
         println!("  flushed transient primary 0x{handle:08X}");
     } else {
         eprintln!(
-            "  WARN  FlushContext failed 0x{rc:08X} for handle 0x{handle:08X} (transient may leak)"
+            "  WARN  FlushContext failed for handle 0x{handle:08X} \
+             (TPM_RC_HANDLE — transient may leak; Windows TBS requires one context per process)"
         );
     }
     Ok(())
+}
+
+#[cfg(windows)]
+fn try_flush_handle(handle: u32) -> Result<bool, String> {
+    use node_tpm2::tbs::commands::{flush_context, tpm_rc_from_response};
+
+    let resp = node_tpm2::tbs::submit_tpm_command(&flush_context(handle))?;
+    let rc = tpm_rc_from_response(&resp).ok_or("short FlushContext response")?;
+    Ok(rc == 0)
 }
 
 #[cfg(windows)]

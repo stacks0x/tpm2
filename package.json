@@ -1,5 +1,5 @@
 {
-  "name": "tpm2",
+  "name": "node-tpm2",
   "version": "0.0.1",
   "description": "Native TPM 2.0 for Node. Zero tooling, no admin. Windows (TBS) and Linux (/dev/tpmrm0). Pre-release.",
   "type": "module",
@@ -28,6 +28,7 @@
   "keywords": [
     "tpm",
     "tpm2",
+    "node-tpm2",
     "attestation",
     "tbs",
     "trusted-platform-module",

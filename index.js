@@ -16,7 +16,7 @@ export const Tpm = {
   async open() {
     throw new TpmError(
       'NOT_IMPLEMENTED',
-      'tpm2 is a pre-release placeholder; the native backend is not published yet.',
+      'node-tpm2 is a pre-release placeholder; the native backend is not published yet.',
       'Follow https://github.com/stacks0x/tpm2 for the first working release.',
     );
   },

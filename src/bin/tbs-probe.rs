@@ -1,10 +1,4 @@
 //! Phase 0 direct-TBS probes (Option B). Zero tss-esapi dependency.
-//!
-//! ```text
-//! cargo run --bin tbs-probe -- all
-//! cargo run --bin tbs-probe -- create-primary          # RSA (library template)
-//! cargo run --bin tbs-probe -- create-primary-ecc      # ECC variant
-//! ```
 
 #[cfg(not(windows))]
 fn main() {
@@ -18,12 +12,11 @@ fn main() {
 
     let result = match cmd.as_str() {
         "get-random" => run_get_random(),
-        "create-primary" => run_create_primary_rsa(),
-        "create-primary-ecc" => run_create_primary_ecc(),
+        "create-primary" => run_create_primary(),
         "all" => run_all(),
         other => {
             eprintln!("unknown command: {other}");
-            eprintln!("usage: tbs-probe [get-random|create-primary|create-primary-ecc|all]");
+            eprintln!("usage: tbs-probe [get-random|create-primary|all]");
             std::process::exit(2);
         }
     };
@@ -37,7 +30,7 @@ fn main() {
 #[cfg(windows)]
 fn run_all() -> Result<(), String> {
     run_get_random()?;
-    run_create_primary_rsa()?;
+    run_create_primary()?;
     println!("\ntbs-probe: all checks passed");
     Ok(())
 }
@@ -53,45 +46,50 @@ fn run_get_random() -> Result<(), String> {
 }
 
 #[cfg(windows)]
-fn run_create_primary_rsa() -> Result<(), String> {
-    use node_tpm2::tbs::commands::{create_primary_owner_rsa_storage, tpm_rc_from_response};
+fn run_create_primary() -> Result<(), String> {
+    use node_tpm2::tbs::commands::{create_primary_candidates, tpm_rc_from_response, tpm_rc_name};
+    use node_tpm2::tbs::rc::{classify_tpm_rc, describe_tpm_rc, RcClass};
 
-    println!("== create-primary (RSA-2048 storage, owner hierarchy, null auth) ==");
-    run_create_primary_with_cmd("CreatePrimary", &create_primary_owner_rsa_storage(), tpm_rc_from_response)
-}
+    println!("== create-primary (owner hierarchy, null auth, password session) ==");
 
-#[cfg(windows)]
-fn run_create_primary_ecc() -> Result<(), String> {
-    use node_tpm2::tbs::commands::{create_primary_owner_ecc_storage, tpm_rc_from_response};
+    for (label, cmd) in create_primary_candidates() {
+        println!("  try: {label}");
 
-    println!("== create-primary-ecc (ECC P256 storage, owner hierarchy, null auth) ==");
-    run_create_primary_with_cmd(
-        "CreatePrimary-ECC",
-        &create_primary_owner_ecc_storage(),
-        tpm_rc_from_response,
-    )
-}
+        let resp = match node_tpm2::tbs::submit_tpm_command(&cmd) {
+            Ok(r) => r,
+            Err(e) => {
+                println!("    TBS error: {e}");
+                continue;
+            }
+        };
 
-#[cfg(windows)]
-fn run_create_primary_with_cmd<F>(
-    op: &str,
-    cmd: &[u8],
-    parse_rc: F,
-) -> Result<(), String>
-where
-    F: Fn(&[u8]) -> Option<u32>,
-{
-    if std::env::var("TBS_PROBE_DEBUG").is_ok() {
-        println!("  command ({} bytes): {}", cmd.len(), hex_preview(cmd));
+        let rc = tpm_rc_from_response(&resp).ok_or("short TPM response")?;
+        let class = classify_tpm_rc(rc);
+        println!(
+            "    -> TPM_RC 0x{rc:08X} ({}) ({})",
+            tpm_rc_name(rc),
+            describe_tpm_rc(rc)
+        );
+
+        match class {
+            RcClass::Success => {
+                if resp.len() >= 14 {
+                    let handle = u32::from_be_bytes([resp[10], resp[11], resp[12], resp[13]]);
+                    println!("  PASS  unprivileged CreatePrimary succeeded ({label})");
+                    println!("  primary handle: 0x{handle:08X}");
+                } else {
+                    println!("  PASS  unprivileged CreatePrimary succeeded ({label})");
+                }
+                return Ok(());
+            }
+            RcClass::Auth => {
+                return Err(format!("CreatePrimary auth failure 0x{rc:08X} ({label})"));
+            }
+            RcClass::Format | RcClass::Other => continue,
+        }
     }
-    let resp = node_tpm2::tbs::submit_tpm_command(cmd)?;
-    let rc = parse_rc(&resp).ok_or("short TPM response")?;
-    report_tpm_rc(op, rc)?;
-    if rc == 0 && resp.len() >= 14 {
-        let handle = u32::from_be_bytes([resp[10], resp[11], resp[12], resp[13]]);
-        println!("  primary handle: 0x{handle:08X}");
-    }
-    Ok(())
+
+    Err("CreatePrimary failed for all templates".to_string())
 }
 
 #[cfg(windows)]
@@ -118,13 +116,4 @@ fn report_tpm_rc(op: &str, rc: u32) -> Result<(), String> {
             Err(format!("{op} failed 0x{rc:08X}"))
         }
     }
-}
-
-#[cfg(windows)]
-fn hex_preview(bytes: &[u8]) -> String {
-    bytes
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect::<Vec<_>>()
-        .join(" ")
 }

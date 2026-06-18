@@ -1,5 +1,8 @@
 //! TPM 2.0 wire-format marshalling (big-endian).
 
+const TPM_ST_SESSIONS: u16 = 0x8002;
+const TPM_RH_PW: u32 = 0x4000_0009;
+
 pub fn u16(v: u16) -> [u8; 2] {
     v.to_be_bytes()
 }
@@ -31,6 +34,27 @@ pub fn command(tag: u16, code: u32, body: &[u8]) -> Vec<u8> {
     cmd.extend_from_slice(body);
     debug_assert_eq!(cmd.len(), size as usize);
     cmd
+}
+
+/// Empty-auth password session for hierarchy commands (Owner/Endorsement/Platform).
+pub fn password_session_null_auth() -> Vec<u8> {
+    let mut session = Vec::with_capacity(9);
+    session.extend_from_slice(&TPM_RH_PW.to_be_bytes());
+    session.extend(tpm2b_empty()); // nonceCaller
+    session.push(0x01); // TPMA_SESSION_CONTINUESESSION
+    session.extend(tpm2b_empty()); // empty auth value
+    session
+}
+
+/// Command with one handle + password session + parameter block.
+pub fn command_with_password_session(handle: u32, code: u32, params: &[u8]) -> Vec<u8> {
+    let session = password_session_null_auth();
+    let mut body = Vec::with_capacity(4 + 4 + session.len() + params.len());
+    body.extend_from_slice(&handle.to_be_bytes());
+    body.extend_from_slice(&(session.len() as u32).to_be_bytes());
+    body.extend(session);
+    body.extend_from_slice(params);
+    command(TPM_ST_SESSIONS, code, &body)
 }
 
 /// Default symmetric wrapper for restricted storage keys: AES-128-CFB.

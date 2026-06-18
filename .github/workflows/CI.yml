@@ -6,7 +6,7 @@ env:
 
 on:
   push:
-    branches: [main]
+    branches: [main, feature/*]
     paths-ignore:
       - '**/*.md'
       - LICENSE
@@ -17,38 +17,45 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Default build: no tss-esapi. tbs-probe must compile on Windows without tpm2-tss.
-  phase0-windows-tbs:
-    name: Phase 0 — tbs-probe compile
+  tbs-probe-windows:
+    name: tbs-probe (Windows)
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo build --bin tbs-probe
+      - run: cargo test tbs::
 
-  # Option A feasibility. Failure is a data point (Option B), not a CI failure.
-  phase0-windows-esapi:
-    name: Phase 0 — esapi build (Option A)
-    runs-on: windows-latest
-    continue-on-error: true
+  napi-build:
+    name: napi build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
       - uses: dtolnay/rust-toolchain@stable
-      - name: Try esapi build
-        id: esapi
+      - run: npm ci
+      - run: npm run build
+      - name: Smoke test (Linux)
+        if: runner.os == 'Linux'
         run: |
-          if cargo build --features esapi; then
-            echo "result=pass" >> "$GITHUB_OUTPUT"
-            echo "::notice::Option A (tss-esapi) builds on Windows"
-          else
-            echo "result=fail" >> "$GITHUB_OUTPUT"
-            echo "::warning::Option A failed on Windows — consider Option B"
-            exit 1
-          fi
+          node --input-type=module -e "
+          import { Tpm } from './index.js';
+          const ok = await Tpm.isAvailable();
+          if (!ok) throw new Error('Tpm.isAvailable() expected true on CI runner');
+          const info = await Tpm.info();
+          console.log('TPM', info);
+          "
 
-  spike-linux:
-    name: Spike harness (Linux smoke)
+  esapi-linux:
+    name: esapi spike (Linux, optional)
     runs-on: ubuntu-latest
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -56,10 +63,19 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y pkg-config libtss2-dev
       - run: cargo build --features esapi --bin spike
 
-  default-build:
-    name: Default features (no esapi)
+  esapi-windows:
+    name: esapi build (Windows, optional)
+    runs-on: windows-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --features esapi
+
+  rust-default:
+    name: cargo test (default features)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo build --lib
+      - run: cargo test

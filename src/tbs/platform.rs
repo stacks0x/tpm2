@@ -12,6 +12,11 @@ pub struct TbsContext {
     handle: *mut c_void,
 }
 
+// SAFETY: TBS context handles are opaque OS resources. All use goes through the
+// process-wide mutex below, so the handle is never accessed concurrently.
+unsafe impl Send for TbsContext {}
+unsafe impl Sync for TbsContext {}
+
 impl TbsContext {
     pub fn open() -> Result<Self, String> {
         unsafe {

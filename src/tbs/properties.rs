@@ -40,16 +40,27 @@ pub fn read_fixed_properties() -> Result<FixedProperties, String> {
     }
 
     let props = parse_tpm_properties(&resp)?;
+    let manufacturer = four_cc(props.get(&TPM_PT_MANUFACTURER).copied().unwrap_or(0));
+    let vendor = vendor_string(&props);
     Ok(FixedProperties {
-        manufacturer: four_cc(props.get(&TPM_PT_MANUFACTURER).copied().unwrap_or(0)),
+        manufacturer: manufacturer.clone(),
         firmware_version: format_firmware(
             props.get(&TPM_PT_FIRMWARE_VERSION_1).copied(),
             props.get(&TPM_PT_FIRMWARE_VERSION_2).copied(),
         ),
-        is_virtual: vendor_string(&props).to_ascii_lowercase().contains("swtpm")
-            || vendor_string(&props).to_ascii_lowercase().contains("virtual"),
+        is_virtual: is_virtual_tpm(&manufacturer, &vendor),
         spec: format_spec(props.get(&TPM_PT_FAMILY_INDICATOR).copied()),
     })
+}
+
+/// Heuristic virtual-TPM detection (not authoritative; reviewers use it as a hint).
+fn is_virtual_tpm(manufacturer: &str, vendor: &str) -> bool {
+    let vendor_lower = vendor.to_ascii_lowercase();
+    if vendor_lower.contains("swtpm") || vendor_lower.contains("virtual") {
+        return true;
+    }
+    // swtpm reports four-cc manufacturer "IBM" without "swtpm" in the vendor string.
+    manufacturer.trim() == "IBM"
 }
 
 fn format_spec(value: Option<u32>) -> String {
@@ -154,5 +165,13 @@ mod tests {
     fn family_indicator_decodes_as_spec_version() {
         assert_eq!(format_spec(Some(0x322e_3000)), "2.0");
         assert_eq!(format_spec(None), "unknown");
+    }
+
+    #[test]
+    fn is_virtual_detects_swtpm_ibm_manufacturer() {
+        assert!(is_virtual_tpm("IBM", ""));
+        assert!(is_virtual_tpm("IBM ", ""));
+        assert!(is_virtual_tpm("STM ", "swtpm"));
+        assert!(!is_virtual_tpm("STM ", "STMicroelectronics"));
     }
 }

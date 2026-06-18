@@ -1,34 +1,35 @@
-# Phase 0 spike — decoupled probes
+# Spike probes — direct TBS validation
 
-Phase 0 answers two **independent** Windows questions. Linux is harness smoke only; it does not close Phase 0.
+Historical Phase 0 probes. **Decision: Option B (direct TBS, no tpm2-tss).** Both privilege
+gates passed unprivileged on Windows 11 (June 2026).
 
 ## Environment (Windows)
 
-- Target: Windows 11 guest in virt-manager (swtpm emulated TPM — **not** host passthrough)
-- Manufacturer reporting **IBM** is expected (swtpm)
-- Every privilege run: **non-elevated PowerShell**. Elevation defeats the test.
+- Windows 11 guest with swtpm emulated TPM (**not** host passthrough)
+- Manufacturer **IBM** is expected (swtpm)
+- Every run: **non-elevated PowerShell**. Elevation defeats the test.
 
-## Two probes
+## Probes
 
-| Probe | Feature | Depends on | Answers |
+| Probe | Feature | Depends on | Purpose |
 |-------|---------|------------|---------|
-| `tbs-probe` | (default) | `windows` crate only | Can a normal user reach TPM through TBS? |
-| `spike` | `esapi` | tss-esapi + tpm2-tss | Option A build + full quote/blob sequence |
+| `tbs-probe` | (default) | `windows` crate only | Unprivileged TBS + CreatePrimary |
+| `spike` | `esapi` | tss-esapi + tpm2-tss | Option A harness (Linux smoke) |
 
-`cargo build` with default features does **not** pull tss-esapi. `tbs-probe` must build even if tpm2-tss never builds on Windows.
+`cargo build` with default features does **not** pull tss-esapi.
 
-## Run order on Windows VM (non-elevated PowerShell)
+## Run on Windows VM (non-elevated PowerShell)
 
 ```powershell
-# 1. Baseline TBS + owner-hierarchy CreatePrimary (direct TBS, no tpm2-tss)
 cargo run --bin tbs-probe -- all
-# create-primary uses RSA-2048 storage (matches library template in src/tpm/esapi.rs)
-# create-primary-ecc is available if you want the ECC variant
+```
 
-# Debug marshalling (prints command hex):
-$env:TBS_PROBE_DEBUG=1; cargo run --bin tbs-probe -- create-primary
+CreatePrimary uses owner-hierarchy **password session** auth (null password) and ECC P256
+storage template. On success the probe **flushes the transient primary** it created
+(`FlushContext` on `0x80xxxxxx` only).
 
-# 2. Option A build feasibility (expected FAIL on Windows — closed)
+```powershell
+# Option A feasibility (expected FAIL on Windows — closed)
 cargo build --features esapi
 ```
 
@@ -38,37 +39,24 @@ cargo build --features esapi
 |--------|---------|--------|
 | `0x00000000` | PASS | Unprivileged provisioning works |
 | Auth-class (`FMT1 \| A`) | Hierarchy wants auth | Real privilege failure |
-| Format-class (`FMT1`, not auth) | Malformed command | Fix marshalling — **not** a privilege result |
+| Format-class (`FMT1`, not auth) | Malformed command | Fix marshalling |
 | Other | Unexpected | Investigate |
 
-Phase 0 closes when `create-primary` returns `0x00000000` non-elevated.
+## Linux (esapi harness smoke only)
 
-## Decision matrix
-
-| `tbs-probe` | full-sequence privilege | Windows `esapi` build | Decision |
-|-------------|-------------------------|----------------------|----------|
-| PASS | PASS | PASS | **Option A** (tss-esapi) |
-| PASS | PASS | FAIL | **Option B** (direct-TBS codec) |
-| PASS | unknown | FAIL | **Option B** — extend tbs-probe |
-| FAIL | — | — | **Bigger problem** — rethink privilege model |
-
-## Linux (harness smoke only)
-
-Confirms spike *code* is correct against `/dev/tpmrm0`. Does not answer Windows architecture questions.
+Does not answer Windows architecture questions.
 
 ```bash
 sudo apt install pkg-config libtss2-dev build-essential
 cargo run --features esapi --bin spike -- all
 ```
 
-## What closes Phase 0
+## Outcome
 
-Both Windows answers: baseline TBS (PASS/FAIL) and A-vs-B from build + full-sequence result.
+| Check | Result |
+|-------|--------|
+| Unprivileged `GetRandom` via TBS | **PASS** |
+| Unprivileged owner-hierarchy `CreatePrimary` | **PASS** |
+| Option A (`tss-esapi` on Windows) | **FAIL** → Option B chosen |
 
-## Option B extension (if `esapi` build fails)
-
-Next command after GetRandom: `TPM2_CreatePrimary` in owner hierarchy (`0x40000001`) with standard ECC storage template, null auth. Distinguish RC classes:
-
-- `0x000` — success, unprivileged provisioning works
-- Auth-class RC — hierarchy demands privilege
-- Format-class RC (`0x080` bit) — fix marshalling, not a privilege signal
+Library work continues on Option B in the main crate and napi bindings.

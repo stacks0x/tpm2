@@ -3,34 +3,49 @@
 Native TPM 2.0 for Node. Zero tooling, no admin.
 
 - Windows via TBS, Linux via `/dev/tpmrm0`.
-- Ships as prebuilt native binaries: `npm install node-tpm2` pulls one binary, no build step, no tpm2-tools, no PATH edits.
-- Subsystem API: `tpm.pcr`, `tpm.keys`, `tpm.random`, `tpm.nv`, `tpm.attest`.
+- Direct TBS command marshalling — no tpm2-tss, no tpm2-tools at install or runtime.
+- Ships as prebuilt native binaries via napi-rs platform packages.
 
-> **Status: pre-release / spike phase.** Option A (`tss-esapi`) validation is in progress.
-> `Tpm.open()` throws `NOT_IMPLEMENTED` until the first working release.
+> **Status: pre-release (`0.0.1` on npm).** `Tpm.isAvailable()` and `Tpm.info()` work on
+> Windows and Linux. `Tpm.open()` and attestation methods are not implemented yet.
 
-## Spike (Phase 0)
 
-Two decoupled probes — see [spike/README.md](./spike/README.md).
+## Install (once platform packages are published)
 
 ```bash
-# Windows (non-elevated): baseline TBS, then Option A feasibility
-cargo run --bin tbs-probe
-cargo build --features esapi
-
-# Linux: harness smoke only
-cargo run --features esapi --bin spike -- all
+npm install node-tpm2
 ```
+
+npm resolves exactly one native binary from `optionalDependencies` — no build step, no
+tpm2-tools, no PATH edits. The main `node-tpm2@0.0.1` package is already on npm; platform
+packages (`node-tpm2-linux-x64-gnu`, etc.) must be published for install-without-tooling to
+work end-to-end.
 
 ## Development
 
 ```bash
+git clone https://github.com/stacks0x/tpm2.git
+cd tpm2
 npm install
-npm run build          # compile .node + native.js loader
-node -e "import { Tpm } from './index.js'; console.log(await Tpm.isAvailable())"
+npm run build
+node --input-type=module -e "
+  import { Tpm } from './index.js';
+  console.log('available', await Tpm.isAvailable());
+  console.log('info', await Tpm.info());
+"
 ```
 
-On Linux, your user needs access to `/dev/tpmrm0` (typically the `tss` group).
+On Linux, your user needs read/write on `/dev/tpmrm0` (typically the `tss` group).
+
+## Windows probe (direct TBS validation)
+
+Non-elevated PowerShell on Windows 11:
+
+```powershell
+cargo run --bin tbs-probe -- all
+```
+
+See [spike/README.md](./spike/README.md) for probe details and RC discipline.
 
 ## License
 

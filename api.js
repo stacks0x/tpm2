@@ -2,7 +2,9 @@ let native = null;
 let nativeLoadError = null;
 
 try {
-  native = await import('./native.js');
+  const { createRequire } = await import('node:module');
+  const require = createRequire(import.meta.url);
+  native = require('./native.cjs');
 } catch (err) {
   nativeLoadError = err;
 }
@@ -48,7 +50,7 @@ export const Tpm = {
     );
   },
 
-  /** Low-level probe used during development. */
+  /** Manufacturer, firmware, and virtual-TPM hint from GetCapability. */
   async getFixedProperties() {
     if (!native?.getFixedProperties) {
       throw new TpmError(
@@ -58,5 +60,10 @@ export const Tpm = {
       );
     }
     return native.getFixedProperties();
+  },
+
+  /** Alias for getFixedProperties. */
+  async info() {
+    return this.getFixedProperties();
   },
 };

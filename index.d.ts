@@ -13,4 +13,9 @@ export declare const Tpm: {
     firmwareVersion: string;
     isVirtual: boolean;
   }>;
+  info(): Promise<{
+    manufacturer: string;
+    firmwareVersion: string;
+    isVirtual: boolean;
+  }>;
 };

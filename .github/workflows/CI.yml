@@ -26,31 +26,95 @@ jobs:
       - run: cargo build --bin tbs-probe
       - run: cargo test tbs::
 
-  napi-build:
-    name: napi build (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
+  build:
+    name: build ${{ matrix.target }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        include:
+          - host: windows-latest
+            target: x86_64-pc-windows-msvc
+          - host: windows-latest
+            target: aarch64-pc-windows-msvc
+          - host: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - host: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            musl: true
+          - host: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+          - host: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            musl: true
+          - host: macos-latest
+            target: aarch64-apple-darwin
+    runs-on: ${{ matrix.host }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: mlugg/setup-zig@v2
+        if: matrix.musl == true
+        with:
+          version: 0.14.1
+      - uses: taiki-e/install-action@v2
+        if: matrix.musl == true
+        with:
+          tool: cargo-zigbuild
       - run: npm ci
-      - run: npm run build
-      - name: Smoke test (Linux)
-        if: runner.os == 'Linux'
+      - name: Build native addon
+        run: |
+          if [ "${{ matrix.musl }}" = "true" ]; then
+            npm run build -- --target ${{ matrix.target }} -x
+          else
+            npm run build -- --target ${{ matrix.target }}
+          fi
+        shell: bash
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bindings-${{ matrix.target }}
+          path: |
+            ${{ env.APP_NAME }}.*.node
+          if-no-files-found: error
+
+  test-linux-gnu:
+    name: smoke test (linux x64 gnu)
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci
+      - uses: actions/download-artifact@v4
+        with:
+          name: bindings-x86_64-unknown-linux-gnu
+          path: .
+      - name: Smoke test
         run: |
           node --input-type=module -e "
-          import { Tpm } from './index.js';
-          const ok = await Tpm.isAvailable();
-          if (!ok) throw new Error('Tpm.isAvailable() expected true on CI runner');
-          const info = await Tpm.info();
-          console.log('TPM', info);
+          import { createRequire } from 'node:module';
+          const require = createRequire(import.meta.url);
+          const native = require('./native.cjs');
+          const ok = await native.isAvailable();
+          if (!ok) throw new Error('isAvailable() expected true');
+          const info = await native.getFixedProperties();
+          if (!info.spec) throw new Error('spec field missing');
+          console.log(info);
           "
+
+  rust-default:
+    name: cargo test (default features)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test
 
   esapi-linux:
     name: esapi spike (Linux, optional)
@@ -71,11 +135,3 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo build --features esapi
-
-  rust-default:
-    name: cargo test (default features)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - run: cargo test

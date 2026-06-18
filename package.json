@@ -1,0 +1,40 @@
+{
+  "name": "tpm2",
+  "version": "0.0.1",
+  "description": "Native TPM 2.0 for Node. Zero tooling, no admin. Windows (TBS) and Linux (/dev/tpmrm0). Pre-release.",
+  "type": "module",
+  "license": "Apache-2.0",
+  "author": "Matt <support@hardproof.app>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/stacks0x/tpm2.git"
+  },
+  "homepage": "https://github.com/stacks0x/tpm2#readme",
+  "bugs": {
+    "url": "https://github.com/stacks0x/tpm2/issues"
+  },
+  "main": "./index.js",
+  "types": "./index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./index.js",
+      "types": "./index.d.ts"
+    }
+  },
+  "files": ["index.js", "index.d.ts"],
+  "engines": {
+    "node": ">=20"
+  },
+  "keywords": [
+    "tpm",
+    "tpm2",
+    "attestation",
+    "tbs",
+    "trusted-platform-module",
+    "security",
+    "native"
+  ],
+  "publishConfig": {
+    "access": "public"
+  }
+}

@@ -4,52 +4,75 @@
 # Usage (on VM after git pull):
 #   ./scripts/vm-credential-test.sh
 #
+# Writes a log alongside console output:
+#   ./scripts/vm-credential-test.sh | tee vm-credential-test.log
+#
 # Optional:
-#   TPM2_DUMP_CMD=1 ./scripts/vm-credential-test.sh   # hex-dump PolicySecret command
+#   TPM2_DUMP_CMD=1 ./scripts/vm-credential-test.sh
 #
 # Safe: read-only TPM ops except transient CreatePrimary/Load/FlushContext.
-# Does NOT Clear, EvictControl, PCR_Extend, or NV_Write.
-set -euo pipefail
+set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-PROBE=(cargo run --no-default-features --features probe-bin --bin tbs-probe --)
+LOG="${VM_CREDENTIAL_TEST_LOG:-$ROOT/vm-credential-test.log}"
+: >"$LOG"
 
-echo "== node-tpm2 VM credential test =="
-echo "repo: $ROOT"
-echo "branch: $(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)"
-echo "commit: $(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
-echo
+# Status/progress on stderr so it stays visible even when stdout is piped to tee.
+log() {
+  echo "$@" | tee -a "$LOG" >&2
+}
+
+log "== node-tpm2 VM credential test =="
+log "repo:   $ROOT"
+log "branch: $(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)"
+log "commit: $(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
+log "log:    $LOG"
+log
 
 if [[ ! -e /dev/tpmrm0 ]]; then
-  echo "ERROR: /dev/tpmrm0 not found. Install/start swtpm or ensure TPM resource manager is up."
+  log "ERROR: /dev/tpmrm0 not found. Install/start swtpm or ensure TPM resource manager is up."
   exit 1
 fi
 
 if ! command -v cargo >/dev/null; then
-  echo "ERROR: cargo not found (install Rust: https://rustup.rs)"
+  log "ERROR: cargo not found (install Rust: https://rustup.rs)"
   exit 1
 fi
 
-echo "== unit tests (no hardware) =="
-cargo test --no-default-features -q
-echo "PASS  unit tests"
-echo
-
+export CARGO_TERM_COLOR=always
 export TPM2_HARDWARE_TEST=1
+
+log "== building tbs-probe (first run may take a few minutes) =="
+if ! cargo build --no-default-features --features probe-bin --bin tbs-probe 2>&1 | tee -a "$LOG"; then
+  log "FAIL  cargo build"
+  exit 1
+fi
+PROBE=(cargo run --no-default-features --features probe-bin --bin tbs-probe --)
+log "PASS  cargo build"
+log
+
+log "== unit tests (no hardware) =="
+if ! cargo test --no-default-features 2>&1 | tee -a "$LOG"; then
+  log "FAIL  unit tests"
+  exit 1
+fi
+log "PASS  unit tests"
+log
 
 run_probe() {
   local name=$1
   shift
-  echo "== $name =="
-  if "${PROBE[@]}" "$@"; then
-    echo "PASS  $name"
+  log "== $name =="
+  # Probe stdout goes to console and log; progress stays on stderr via log().
+  if "${PROBE[@]}" "$@" 2>&1 | tee -a "$LOG"; then
+    log "PASS  $name"
   else
-    echo "FAIL  $name (exit $?)"
+    log "FAIL  $name (exit ${PIPESTATUS[0]})"
     return 1
   fi
-  echo
+  log
 }
 
 FAIL=0
@@ -60,13 +83,13 @@ run_probe "provision-ak" provision-ak || FAIL=1
 run_probe "policy-secret" policy-secret || FAIL=1
 run_probe "activate-credential" activate-credential || FAIL=1
 
-echo "== summary =="
+log "== summary =="
 if [[ "$FAIL" -eq 0 ]]; then
-  echo "All probes passed."
+  log "All probes passed."
   exit 0
 else
-  echo "One or more probes failed."
-  echo "policy-secret / activate-credential may still fail on some swtpm EK policies;"
-  echo "compare with: TPM2TOOLS_TCTI=device:/dev/tpmrm0 tpm2 policysecret -S /tmp/s.ctx -c endorsement"
+  log "One or more probes failed (see output above and $LOG)."
+  log "Baseline: TPM2TOOLS_TCTI=device:/dev/tpmrm0 tpm2 startauthsession -S policy --session=/tmp/s.ctx"
+  log "          TPM2TOOLS_TCTI=device:/dev/tpmrm0 tpm2 policysecret -S /tmp/s.ctx -c endorsement"
   exit 1
 fi

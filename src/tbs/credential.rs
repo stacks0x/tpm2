@@ -50,7 +50,7 @@ impl EkHandle {
 }
 
 fn start_policy_session() -> TpmResult<PolicySession> {
-    let nonce_caller = [0x11u8; 16];
+    let nonce_caller = [0x11u8; 32];
     let cmd = start_auth_session_policy(&nonce_caller);
     let resp = submit_tpm_command(&cmd).map_err(TpmOpError::transport)?;
     check_tpm_rc(&resp, "StartAuthSession")?;
@@ -72,7 +72,7 @@ fn policy_secret(session: &PolicySession, auth_handle: u32) -> TpmResult<()> {
     params.extend(tpm2b_empty()); // cpHashA
     params.extend(tpm2b_empty()); // policyRef
     params.extend_from_slice(&0i32.to_be_bytes()); // expiration (0 = no timeout)
-    let auth = policy_session_auth(session.handle, &session.nonce_tpm);
+    let auth = policy_session_auth(session.handle);
     let cmd = command_with_handles_and_session(
         &[auth_handle],
         &auth,
@@ -87,7 +87,7 @@ fn policy_secret(session: &PolicySession, auth_handle: u32) -> TpmResult<()> {
 fn policy_command_code(session: &PolicySession, command_code: u32) -> TpmResult<()> {
     let mut params = Vec::new();
     params.extend_from_slice(&command_code.to_be_bytes());
-    let auth = policy_session_auth(session.handle, &session.nonce_tpm);
+    let auth = policy_session_auth(session.handle);
     let cmd = command_with_handles_and_session(&[], &auth, TPM_CC_POLICY_COMMAND_CODE, &params);
     let resp = submit_tpm_command(&cmd).map_err(TpmOpError::transport)?;
     check_tpm_rc(&resp, "PolicyCommandCode")?;
@@ -151,7 +151,7 @@ fn activate_credential(
     let mut params = Vec::new();
     params.extend(tpm2b(credential_blob));
     params.extend(tpm2b(secret));
-    let auth = policy_session_auth(session.handle, &session.nonce_tpm);
+    let auth = policy_session_auth(session.handle);
     let cmd = command_with_handles_and_session(
         &[activate_handle, key_handle],
         &auth,

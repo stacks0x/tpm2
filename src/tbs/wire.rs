@@ -72,13 +72,13 @@ pub fn command_with_handles_and_session(
     command(TPM_ST_SESSIONS, code, &body)
 }
 
-/// Policy session auth area entry (nonce + empty HMAC until policy is satisfied).
-pub fn policy_session_auth(session_handle: u32, nonce: &[u8]) -> Vec<u8> {
-    let mut session = Vec::with_capacity(4 + 2 + nonce.len() + 1 + 2);
+/// Policy session auth area (empty nonce/HMAC during policy construction).
+pub fn policy_session_auth(session_handle: u32) -> Vec<u8> {
+    let mut session = Vec::with_capacity(4 + 2 + 1 + 2);
     session.extend_from_slice(&session_handle.to_be_bytes());
-    session.extend(tpm2b(nonce));
+    session.extend(tpm2b_empty()); // nonceCaller
     session.push(0x01); // TPMA_SESSION_CONTINUESESSION
-    session.extend(tpm2b_empty());
+    session.extend(tpm2b_empty()); // authorization (HMAC) empty until policy completes
     session
 }
 
@@ -90,7 +90,7 @@ pub fn start_auth_session_policy(nonce_caller: &[u8]) -> Vec<u8> {
     params.extend(tpm2b(nonce_caller));
     params.extend(tpm2b_empty()); // encryptedSalt
     params.push(TPM_SE_POLICY);
-    params.extend(sym_def_aes128_cfb());
+    params.extend(asym_scheme_null()); // no session encryption
     params.extend_from_slice(&u16(TPM_ALG_SHA256));
     command(TPM_ST_NO_SESSIONS, 0x0000_0176, &params)
 }

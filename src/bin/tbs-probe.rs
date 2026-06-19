@@ -18,6 +18,7 @@ fn main() {
         "quote" => run_quote(),
         "provision-ak" => run_provision_ak(),
         "activate-credential" => run_activate_credential(),
+        "policy-secret" => run_policy_secret(),
         "all" => run_all(),
         other => {
             eprintln!("unknown command: {other}");
@@ -155,6 +156,47 @@ fn run_activate_credential() -> Result<(), String> {
     }
     println!("  PASS  credential roundtrip recovered expected secret");
     Ok(())
+}
+
+fn run_policy_secret() -> Result<(), String> {
+    println!("== policy-secret (StartAuthSession + PolicySecret endorsement) ==");
+    let nonce_caller = [0x11u8; 32];
+    let cmd = node_tpm2::tbs::wire::start_auth_session_policy(&nonce_caller);
+    println!("  StartAuthSession cmd: {} bytes", cmd.len());
+    let resp = node_tpm2::tbs::submit_tpm_command(&cmd).map_err(|e| e)?;
+    let rc = tpm_rc_from_response(&resp).ok_or("short StartAuthSession response")?;
+    if rc != 0 {
+        return Err(format!("StartAuthSession failed 0x{rc:08X}"));
+    }
+    let handle = node_tpm2::tbs::commands::object_handle_from_response(&resp)
+        .ok_or("missing session handle")?;
+    let tag = u16::from_be_bytes([resp[0], resp[1]]);
+    let mut parser = node_tpm2::tbs::parse::ResponseParser::after_rc(&resp)
+        .map_err(|e| e.message)?;
+    let _ = parser.read_u32().map_err(|e| e.message)?;
+    if tag == 0x8002 {
+        let _ = parser.read_u32().map_err(|e| e.message)?;
+    }
+    let nonce_tpm = parser.read_tpm2b().map_err(|e| e.message)?;
+    println!("  session handle: 0x{handle:08X}");
+    println!("  nonceTPM: {} bytes", nonce_tpm.len());
+
+    let mut params = Vec::new();
+    params.extend(node_tpm2::tbs::wire::tpm2b(&nonce_tpm));
+    params.extend(node_tpm2::tbs::wire::tpm2b_empty());
+    params.extend(node_tpm2::tbs::wire::tpm2b_empty());
+    params.extend_from_slice(&0i32.to_be_bytes());
+    let auth = node_tpm2::tbs::wire::policy_session_auth(handle);
+    let ps_cmd = node_tpm2::tbs::wire::command_with_handles_and_session(
+        &[0x4000_000B],
+        &auth,
+        0x0000_016B,
+        &params,
+    );
+    println!("  PolicySecret cmd: {} bytes", ps_cmd.len());
+    let ps_resp = node_tpm2::tbs::submit_tpm_command(&ps_cmd).map_err(|e| e)?;
+    let ps_rc = tpm_rc_from_response(&ps_resp).ok_or("short PolicySecret response")?;
+    report_tpm_rc("PolicySecret", ps_rc)
 }
 
 fn flush_created_transient(handle: u32) -> Result<(), String> {

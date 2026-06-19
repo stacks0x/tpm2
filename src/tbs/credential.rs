@@ -78,7 +78,10 @@ impl EkHandle {
 fn flush_stale_policy_sessions() {
     for slot in 0x10..0x40u32 {
         let _ = flush_handle(0x0300_0000 | slot);
+        #[cfg(target_os = "linux")]
         let _ = flush_handle(0x0200_0000 | (slot + 1));
+        #[cfg(windows)]
+        let _ = flush_handle(0x0200_0000 | slot);
     }
 }
 

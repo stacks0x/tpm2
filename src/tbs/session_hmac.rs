@@ -74,13 +74,27 @@ pub fn policy_auth_session_handle(policy_session_handle: u32) -> u32 {
     0x0200_0000 | (index + 1)
 }
 
+/// Authorization-area session handle on the wire.
+/// Linux `/dev/tpmrm0` maps policy sessions to the paired `0x02…` slot; Windows TBS uses the
+/// handle returned by StartAuthSession unchanged.
+pub fn auth_session_handle_wire(policy_session_handle: u32) -> u32 {
+    #[cfg(target_os = "linux")]
+    {
+        policy_auth_session_handle(policy_session_handle)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        policy_session_handle
+    }
+}
+
 pub fn build_session_auth(
     policy_session_handle: u32,
     nonce_caller: &[u8],
     session_attributes: u8,
     auth_hmac: &[u8],
 ) -> Vec<u8> {
-    let auth_handle = policy_auth_session_handle(policy_session_handle);
+    let auth_handle = auth_session_handle_wire(policy_session_handle);
     let mut session = Vec::with_capacity(4 + 2 + nonce_caller.len() + 1 + 2 + auth_hmac.len());
     session.extend_from_slice(&auth_handle.to_be_bytes());
     session.extend(super::wire::tpm2b(nonce_caller));

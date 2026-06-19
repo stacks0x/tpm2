@@ -33,6 +33,7 @@ pub fn describe_tpm_rc(rc: u32) -> String {
     let name = match rc {
         0 => "success",
         0x0000_0125 => "TPM_RC_ASYMMETRIC",
+        0x0000_018B => "TPM_RC_HANDLE",
         0x0000_0143 => "TPM_RC_ATTRIBUTES",
         0x0000_017F => "TPM_RC_SIZE",
         0x0000_038E => "TPM_RC_AUTH_FAIL",

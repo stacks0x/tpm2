@@ -27,6 +27,27 @@ export declare type ReadPublicResult = {
   name: Buffer;
 };
 
+export declare type ProvisionAkResult = {
+  akPublicDer: Buffer;
+  akBlob: AkBlob;
+};
+
+export declare type ActivateCredentialOptions = {
+  credentialBlob: Buffer;
+  secret: Buffer;
+};
+
+export declare type ActivateCredentialFlatOptions = ActivateCredentialOptions & {
+  akBlob: AkBlob;
+};
+
+export declare interface AkHandle {
+  export(): AkBlob;
+  readonly publicKeyDer: Buffer;
+  quote(opts: Omit<QuoteOptions, 'akBlob'>): Promise<QuoteResult>;
+  activateCredential(opts: ActivateCredentialOptions): Promise<Buffer>;
+}
+
 export declare type TpmInfo = {
   manufacturer: string;
   firmwareVersion: string;
@@ -41,6 +62,7 @@ export declare interface TpmHandle {
   };
   attest: {
     ekCertificate(): Promise<Buffer | null>;
+    provisionAk(opts?: { algorithm?: 'ecc' | 'rsa' }): Promise<AkHandle>;
     quote(opts: QuoteOptions): Promise<QuoteResult>;
   };
   readPublic(handle: string): Promise<ReadPublicResult>;
@@ -56,6 +78,8 @@ export declare const Tpm: {
   readPublic(handle: string): Promise<ReadPublicResult>;
   readEkCertificate(): Promise<Buffer | null>;
   quote(opts: QuoteOptions): Promise<QuoteResult>;
+  provisionAk(opts?: { algorithm?: 'ecc' | 'rsa' }): Promise<ProvisionAkResult>;
+  activateCredential(opts: ActivateCredentialFlatOptions): Promise<Buffer>;
 };
 
 export declare function pcrRead(
@@ -68,6 +92,14 @@ export declare function readPublic(handle: string): Promise<ReadPublicResult>;
 export declare function readEkCertificate(): Promise<Buffer | null>;
 
 export declare function quote(opts: QuoteOptions): Promise<QuoteResult>;
+
+export declare function provisionAk(
+  opts?: { algorithm?: 'ecc' | 'rsa' },
+): Promise<ProvisionAkResult>;
+
+export declare function activateCredential(
+  opts: ActivateCredentialFlatOptions,
+): Promise<Buffer>;
 
 export declare function getFixedProperties(): Promise<TpmInfo>;
 

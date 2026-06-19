@@ -200,7 +200,7 @@ fn aes_cfb_encrypt(key: &[u8], plaintext: &[u8]) -> TpmResult<Vec<u8>> {
         return Err(TpmOpError::other("AES-128 key too short"));
     }
     let iv = [0u8; 16];
-    let mut cipher = Aes128CfbEnc::new_from_slices(&key[..16], &iv)
+    let cipher = Aes128CfbEnc::new_from_slices(&key[..16], &iv)
         .map_err(|e| TpmOpError::other(format!("AES-CFB init failed: {e}")))?;
     let mut out = plaintext.to_vec();
     cipher.encrypt(&mut out);

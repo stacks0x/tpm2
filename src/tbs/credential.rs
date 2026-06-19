@@ -69,8 +69,9 @@ fn start_policy_session() -> TpmResult<PolicySession> {
 fn policy_secret(session: &PolicySession, auth_handle: u32) -> TpmResult<()> {
     let mut params = Vec::new();
     params.extend(tpm2b(&session.nonce_tpm));
-    params.extend(tpm2b_empty());
-    params.extend(tpm2b_empty());
+    params.extend(tpm2b_empty()); // cpHashA
+    params.extend(tpm2b_empty()); // policyRef
+    params.extend_from_slice(&0i32.to_be_bytes()); // expiration (0 = no timeout)
     let auth = policy_session_auth(session.handle, &session.nonce_tpm);
     let cmd = command_with_handles_and_session(
         &[auth_handle],

@@ -28,6 +28,19 @@ pub struct AkBlobJs {
 }
 
 #[napi(object)]
+pub struct ProvisionAkJs {
+    pub ak_public_der: Buffer,
+    pub ak_blob: AkBlobJs,
+}
+
+#[napi(object)]
+pub struct ActivateCredentialOptionsJs {
+    pub ak_blob: AkBlobJs,
+    pub credential_blob: Buffer,
+    pub secret: Buffer,
+}
+
+#[napi(object)]
 pub struct QuoteJs {
     pub message: Buffer,
     pub signature: Buffer,
@@ -144,5 +157,45 @@ pub async fn quote(opts: QuoteOptionsJs) -> Result<QuoteJs> {
             message: Buffer::from(result.message),
             signature: Buffer::from(result.signature),
         })
+    }
+}
+
+#[napi]
+pub async fn provision_ak() -> Result<ProvisionAkJs> {
+    #[cfg(not(any(windows, target_os = "linux")))]
+    {
+        return Err(TpmOpError::unavailable("TPM is not available on this platform").into());
+    }
+    #[cfg(any(windows, target_os = "linux"))]
+    {
+        let result = crate::tbs::keys::provision_ak()?;
+        Ok(ProvisionAkJs {
+            ak_public_der: Buffer::from(result.ak_public_der),
+            ak_blob: AkBlobJs {
+                public: Buffer::from(result.ak_blob.public),
+                private: Buffer::from(result.ak_blob.private),
+            },
+        })
+    }
+}
+
+#[napi]
+pub async fn activate_credential(opts: ActivateCredentialOptionsJs) -> Result<Buffer> {
+    #[cfg(not(any(windows, target_os = "linux")))]
+    {
+        return Err(TpmOpError::unavailable("TPM is not available on this platform").into());
+    }
+    #[cfg(any(windows, target_os = "linux"))]
+    {
+        let blob = crate::tbs::keys::AkBlob {
+            public: opts.ak_blob.public.to_vec(),
+            private: opts.ak_blob.private.to_vec(),
+        };
+        let recovered = crate::tbs::credential::activate_credential_with_ak_blob(
+            &blob,
+            &opts.credential_blob,
+            &opts.secret,
+        )?;
+        Ok(Buffer::from(recovered))
     }
 }

@@ -1,8 +1,9 @@
 //! Direct-TBS validation probes (Option B). Linux and Windows, non-elevated.
 
 use node_tpm2::tbs::commands::{create_primary_candidates, get_random_8, tpm_rc_from_response, tpm_rc_name};
+use node_tpm2::tbs::credential::credential_roundtrip_self_test;
+use node_tpm2::tbs::keys::{provision_ak, provision_ak_blob};
 use node_tpm2::tbs::parse::attest_extra_data;
-use node_tpm2::tbs::keys::provision_ak_blob;
 use node_tpm2::tbs::pcr::{pcr_read, PcrBank};
 use node_tpm2::tbs::quote::quote_with_ak_blob;
 use node_tpm2::tbs::rc::{classify_tpm_rc, describe_tpm_rc, RcClass};
@@ -15,10 +16,14 @@ fn main() {
         "create-primary" => run_create_primary(),
         "pcr-read" => run_pcr_read(),
         "quote" => run_quote(),
+        "provision-ak" => run_provision_ak(),
+        "activate-credential" => run_activate_credential(),
         "all" => run_all(),
         other => {
             eprintln!("unknown command: {other}");
-            eprintln!("usage: tbs-probe [get-random|create-primary|pcr-read|quote|all]");
+            eprintln!(
+                "usage: tbs-probe [get-random|create-primary|pcr-read|quote|provision-ak|activate-credential|all]"
+            );
             std::process::exit(2);
         }
     };
@@ -34,6 +39,8 @@ fn run_all() -> Result<(), String> {
     run_create_primary()?;
     run_pcr_read()?;
     run_quote()?;
+    run_provision_ak()?;
+    run_activate_credential()?;
     println!("\ntbs-probe: all checks passed");
     Ok(())
 }
@@ -121,6 +128,32 @@ fn run_quote() -> Result<(), String> {
         return Err("qualifyingData does not round-trip in TPMS_ATTEST.extraData".to_string());
     }
     println!("  PASS  qualifyingData round-trips in extraData");
+    Ok(())
+}
+
+fn run_provision_ak() -> Result<(), String> {
+    println!("== provision-ak (wrapped AK blob + SPKI DER) ==");
+
+    let result = provision_ak().map_err(|e| e.message)?;
+    println!("  ak public DER: {} bytes", result.ak_public_der.len());
+    println!(
+        "  ak blob: public={} bytes, private={} bytes",
+        result.ak_blob.public.len(),
+        result.ak_blob.private.len()
+    );
+    println!("  PASS  provisionAk returned exportable blob");
+    Ok(())
+}
+
+fn run_activate_credential() -> Result<(), String> {
+    println!("== activate-credential (MakeCredential off-TPM + ActivateCredential) ==");
+
+    let blob = provision_ak_blob().map_err(|e| e.message)?;
+    let recovered = credential_roundtrip_self_test(&blob).map_err(|e| e.message)?;
+    if recovered != b"node-tpm2-credential-self-test" {
+        return Err("credential roundtrip secret mismatch".to_string());
+    }
+    println!("  PASS  credential roundtrip recovered expected secret");
     Ok(())
 }
 

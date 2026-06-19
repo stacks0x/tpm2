@@ -66,7 +66,7 @@ pub fn flush_context(handle: u32) -> Vec<u8> {
 
 /// Submit FlushContext after refusing persistent / permanent handles.
 pub fn flush_handle(handle: u32) -> crate::tbs::error::TpmResult<()> {
-    use crate::tbs::error::{check_tpm_rc, TpmOpError, TpmResult};
+    use crate::tbs::error::{check_tpm_rc, TpmOpError};
     use crate::tbs::submit_tpm_command;
 
     if !is_flush_context_handle(handle) {

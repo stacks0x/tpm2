@@ -63,6 +63,42 @@ export class TpmError extends Error {
   }
 }
 
+function createAkHandle(akPublicDer, akBlob) {
+  return {
+    /** Wrapped TPM2B_PUBLIC + TPM2B_PRIVATE for persistence (no persistent TPM handle). */
+    export() {
+      return {
+        public: Buffer.from(akBlob.public),
+        private: Buffer.from(akBlob.private),
+      };
+    },
+
+    /** SPKI DER for the AK public area (from provisioning). */
+    get publicKeyDer() {
+      return Buffer.from(akPublicDer);
+    },
+
+    quote: wrapNative(async (opts) => {
+      requireNative('quote');
+      return native.quote({
+        akBlob,
+        pcrSelection: opts.pcrSelection,
+        qualifyingData: opts.qualifyingData,
+        bank: opts.bank,
+      });
+    }),
+
+    activateCredential: wrapNative(async (opts) => {
+      requireNative('activateCredential');
+      return native.activateCredential({
+        akBlob,
+        credentialBlob: opts.credentialBlob,
+        secret: opts.secret,
+      });
+    }),
+  };
+}
+
 function createTpmHandle() {
   return {
     async info() {
@@ -82,6 +118,13 @@ function createTpmHandle() {
       ekCertificate: wrapNative(async () => {
         requireNative('readEkCertificate');
         return native.readEkCertificate();
+      }),
+
+      /** Provision a transient AK; returns a handle with export/quote/activateCredential. */
+      provisionAk: wrapNative(async (_opts) => {
+        requireNative('provisionAk');
+        const result = await native.provisionAk();
+        return createAkHandle(result.akPublicDer, result.akBlob);
       }),
 
       /** Produce a quote from a wrapped AK blob (transient load, no persistent handle). */
@@ -174,5 +217,21 @@ export const Tpm = {
   quote: wrapNative(async (opts) => {
     requireNative('quote');
     return native.quote(opts);
+  }),
+
+  /** Flat native binding: provision AK (returns akPublicDer + akBlob). */
+  provisionAk: wrapNative(async () => {
+    requireNative('provisionAk');
+    const result = await native.provisionAk();
+    return {
+      akPublicDer: result.akPublicDer,
+      akBlob: result.akBlob,
+    };
+  }),
+
+  /** Flat native binding: activate credential with wrapped AK blob. */
+  activateCredential: wrapNative(async (opts) => {
+    requireNative('activateCredential');
+    return native.activateCredential(opts);
   }),
 };

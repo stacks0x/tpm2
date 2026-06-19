@@ -92,6 +92,21 @@ pub fn start_auth_session_nonce_tpm(resp: &[u8]) -> TpmResult<Vec<u8>> {
     parser.read_tpm2b()
 }
 
+/// Parameter area of a response with **no** response handles (ReadPublic, Quote, etc.).
+pub fn parameters_after_rc(resp: &[u8]) -> TpmResult<ResponseParser<'_>> {
+    if resp.len() < 14 {
+        return Err(TpmOpError::other("TPM response too short"));
+    }
+    let tag = u16::from_be_bytes([resp[0], resp[1]]);
+    let mut parser = ResponseParser::after_rc(resp)?;
+    if tag == TPM_ST_SESSIONS {
+        let auth_size = parser.read_u32()? as usize;
+        let _ = parser.read_bytes(auth_size)?;
+    }
+    let _ = parser.read_u32()?; // parameter area size
+    Ok(parser)
+}
+
 pub fn pcr_indices_from_bitmap(pcr_select: &[u8]) -> Vec<u32> {
     let mut indices = Vec::new();
     for (byte_idx, &byte) in pcr_select.iter().enumerate() {

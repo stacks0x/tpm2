@@ -9,7 +9,7 @@ use crate::tbs::commands::{
 use crate::tbs::error::{check_tpm_rc, TpmOpError, TpmResult};
 use crate::tbs::keys::{create_storage_primary, load_ak, AkBlob};
 use crate::tbs::make_credential_sw;
-use crate::tbs::parse::{start_auth_session_nonce_tpm, ResponseParser};
+use crate::tbs::parse::{parameters_after_rc, start_auth_session_nonce_tpm};
 use crate::tbs::read_public::read_public;
 use crate::tbs::session_hmac::{
     handle_name_for_cphash, policy_session_auth_area, random_nonce_32, session_key_from_start,
@@ -226,8 +226,7 @@ fn activate_credential(
     );
     let resp = submit_tpm_command(&cmd).map_err(TpmOpError::transport)?;
     check_tpm_rc(&resp, "ActivateCredential")?;
-    let mut parser = ResponseParser::after_rc(&resp)?;
-    let _ = parser.read_u32()?;
+    let mut parser = parameters_after_rc(&resp)?;
     Ok(parser.read_tpm2b()?)
 }
 

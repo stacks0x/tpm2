@@ -1,7 +1,7 @@
 //! TPM2_ReadPublic and SPKI DER extraction.
 
 use crate::tbs::error::{check_tpm_rc, TpmOpError, TpmResult};
-use crate::tbs::parse::ResponseParser;
+use crate::tbs::parse::parameters_after_rc;
 use crate::tbs::wire::{command, u32};
 use crate::tbs::submit_tpm_command;
 
@@ -28,7 +28,7 @@ pub fn read_public(handle: u32) -> TpmResult<ReadPublicResult> {
     let resp = submit_tpm_command(&cmd).map_err(TpmOpError::transport)?;
     check_tpm_rc(&resp, "ReadPublic")?;
 
-    let mut parser = ResponseParser::after_rc(&resp)?;
+    let mut parser = parameters_after_rc(&resp)?;
     let out_public = parser.read_tpm2b()?;
     let name = parser.read_tpm2b()?;
     let _qualified_name = parser.read_tpm2b()?;

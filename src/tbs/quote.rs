@@ -2,7 +2,7 @@
 
 use crate::tbs::error::{check_tpm_rc, TpmOpError, TpmResult};
 use crate::tbs::keys::{create_storage_primary, load_ak, AkBlob};
-use crate::tbs::parse::ResponseParser;
+use crate::tbs::parse::{parameters_after_rc, ResponseParser};
 use crate::tbs::pcr::{pcr_selection_list, PcrBank};
 use crate::tbs::wire::{command_with_password_session, tpm2b, u16};
 use crate::tbs::submit_tpm_command;
@@ -38,8 +38,7 @@ pub fn quote(
     let resp = submit_tpm_command(&cmd).map_err(TpmOpError::transport)?;
     check_tpm_rc(&resp, "Quote")?;
 
-    let mut parser = ResponseParser::after_rc(&resp)?;
-    let _param_size = parser.read_u32()?;
+    let mut parser = parameters_after_rc(&resp)?;
     let message = parser.read_tpm2b()?;
     let signature = parser.read_tpm2b()?;
     Ok(QuoteResult {

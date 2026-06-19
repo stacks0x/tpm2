@@ -179,14 +179,8 @@ fn run_policy_secret() -> Result<(), String> {
     }
     let handle = node_tpm2::tbs::commands::object_handle_from_response(&resp)
         .ok_or("missing session handle")?;
-    let tag = u16::from_be_bytes([resp[0], resp[1]]);
-    let mut parser = node_tpm2::tbs::parse::ResponseParser::after_rc(&resp)
+    let nonce_tpm = node_tpm2::tbs::parse::start_auth_session_nonce_tpm(&resp)
         .map_err(|e| e.message)?;
-    let _ = parser.read_u32().map_err(|e| e.message)?;
-    if tag == 0x8002 {
-        let _ = parser.read_u32().map_err(|e| e.message)?;
-    }
-    let nonce_tpm = parser.read_tpm2b().map_err(|e| e.message)?;
     println!("  session handle: 0x{handle:08X}");
     println!("  nonceTPM: {} bytes", nonce_tpm.len());
 

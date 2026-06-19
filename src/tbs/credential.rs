@@ -9,7 +9,7 @@ use crate::tbs::commands::{
 use crate::tbs::error::{check_tpm_rc, TpmOpError, TpmResult};
 use crate::tbs::keys::{create_storage_primary, load_ak, AkBlob};
 use crate::tbs::make_credential_sw;
-use crate::tbs::parse::ResponseParser;
+use crate::tbs::parse::{start_auth_session_nonce_tpm, ResponseParser};
 use crate::tbs::read_public::read_public;
 use crate::tbs::session_hmac::{
     handle_name_for_cphash, policy_session_auth_area, random_nonce_32, session_key_from_start,
@@ -18,7 +18,6 @@ use crate::tbs::session_hmac::{
 use crate::tbs::wire::{command_with_handles_and_session, start_auth_session_policy, tpm2b};
 use crate::tbs::submit_tpm_command;
 
-const TPM_ST_SESSIONS: u16 = 0x8002;
 const TPM_CC_POLICY_SECRET: u32 = 0x0000_0151;
 const TPM_CC_POLICY_COMMAND_CODE: u32 = 0x0000_016C;
 const TPM_CC_ACTIVATE_CREDENTIAL: u32 = 0x0000_0147;
@@ -93,13 +92,7 @@ fn start_policy_session() -> TpmResult<PolicySession> {
     check_tpm_rc(&resp, "StartAuthSession")?;
     let handle = object_handle_from_response(&resp)
         .ok_or_else(|| TpmOpError::other("StartAuthSession: missing session handle"))?;
-    let tag = u16::from_be_bytes([resp[0], resp[1]]);
-    let mut parser = ResponseParser::after_rc(&resp)?;
-    let _ = parser.read_u32()?; // session handle
-    if tag == TPM_ST_SESSIONS {
-        let _ = parser.read_u32()?; // parameter size
-    }
-    let nonce_tpm = parser.read_tpm2b()?;
+    let nonce_tpm = start_auth_session_nonce_tpm(&resp)?;
     let session_key = session_key_from_start(&nonce_tpm, &nonce_caller);
     Ok(PolicySession {
         handle,

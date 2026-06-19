@@ -2,6 +2,8 @@
 
 use crate::tbs::error::{TpmOpError, TpmResult};
 
+const TPM_ST_SESSIONS: u16 = 0x8002;
+
 pub struct ResponseParser<'a> {
     data: &'a [u8],
     offset: usize,
@@ -74,6 +76,22 @@ impl<'a> ResponseParser<'a> {
     }
 }
 
+/// `nonceTPM` from a successful `StartAuthSession` response (handle area + param size + TPM2B).
+pub fn start_auth_session_nonce_tpm(resp: &[u8]) -> TpmResult<Vec<u8>> {
+    if resp.len() < 18 {
+        return Err(TpmOpError::other("StartAuthSession response too short"));
+    }
+    let tag = u16::from_be_bytes([resp[0], resp[1]]);
+    let mut parser = ResponseParser::after_rc(resp)?;
+    let _ = parser.read_u32()?; // session handle
+    if tag == TPM_ST_SESSIONS {
+        let auth_size = parser.read_u32()? as usize;
+        let _ = parser.read_bytes(auth_size)?;
+    }
+    let _ = parser.read_u32()?; // parameter area size
+    parser.read_tpm2b()
+}
+
 pub fn pcr_indices_from_bitmap(pcr_select: &[u8]) -> Vec<u32> {
     let mut indices = Vec::new();
     for (byte_idx, &byte) in pcr_select.iter().enumerate() {
@@ -143,5 +161,21 @@ mod tests {
     #[test]
     fn pcr_bitmap_indices() {
         assert_eq!(pcr_indices_from_bitmap(&[0x83, 0x00, 0x00]), vec![0, 1, 7]);
+    }
+
+    #[test]
+    fn start_auth_session_nonce_no_sessions_tag() {
+        let body_len = 4 + 4 + 2 + 32; // handle + param size + TPM2B nonce
+        let total = 10 + body_len;
+        let mut resp = Vec::new();
+        resp.extend_from_slice(&[0x80, 0x01]); // TPM_ST_NO_SESSIONS
+        resp.extend_from_slice(&(total as u32).to_be_bytes());
+        resp.extend_from_slice(&0u32.to_be_bytes()); // rc
+        resp.extend_from_slice(&0x0300_0014u32.to_be_bytes()); // handle
+        resp.extend_from_slice(&(body_len as u32).to_be_bytes()); // param size
+        resp.extend_from_slice(&[0x00, 0x20]); // TPM2B size
+        resp.extend_from_slice(&[0xAAu8; 32]); // nonce
+        let nonce = start_auth_session_nonce_tpm(&resp).expect("nonce");
+        assert_eq!(nonce, vec![0xAA; 32]);
     }
 }

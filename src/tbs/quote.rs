@@ -95,7 +95,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn linux_quote_roundtrip() {
-        if !Path::new("/dev/tpmrm0").exists() {
+        if !crate::tbs::hw_test::enabled() {
             return;
         }
         let primary = create_storage_primary().expect("CreatePrimary");

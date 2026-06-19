@@ -1,7 +1,11 @@
 //! TPM 2.0 wire-format marshalling (big-endian).
 
 const TPM_ST_SESSIONS: u16 = 0x8002;
+const TPM_ST_NO_SESSIONS: u16 = 0x8001;
 const TPM_RH_PW: u32 = 0x4000_0009;
+const TPM_RH_NULL: u32 = 0x4000_0007;
+const TPM_SE_POLICY: u8 = 0x01;
+const TPM_ALG_SHA256: u16 = 0x000B;
 
 pub fn u16(v: u16) -> [u8; 2] {
     v.to_be_bytes()
@@ -48,13 +52,47 @@ pub fn password_session_null_auth() -> Vec<u8> {
 
 /// Command with one handle + password session + parameter block.
 pub fn command_with_password_session(handle: u32, code: u32, params: &[u8]) -> Vec<u8> {
-    let session = password_session_null_auth();
-    let mut body = Vec::with_capacity(4 + 4 + session.len() + params.len());
-    body.extend_from_slice(&handle.to_be_bytes());
+    command_with_handles_and_session(&[handle], &password_session_null_auth(), code, params)
+}
+
+/// Command with multiple handles + one auth session + parameters.
+pub fn command_with_handles_and_session(
+    handles: &[u32],
+    session: &[u8],
+    code: u32,
+    params: &[u8],
+) -> Vec<u8> {
+    let mut body = Vec::new();
+    for h in handles {
+        body.extend_from_slice(&h.to_be_bytes());
+    }
     body.extend_from_slice(&(session.len() as u32).to_be_bytes());
     body.extend(session);
     body.extend_from_slice(params);
     command(TPM_ST_SESSIONS, code, &body)
+}
+
+/// Policy session auth area entry (nonce + empty HMAC until policy is satisfied).
+pub fn policy_session_auth(session_handle: u32, nonce: &[u8]) -> Vec<u8> {
+    let mut session = Vec::with_capacity(4 + 2 + nonce.len() + 1 + 2);
+    session.extend_from_slice(&session_handle.to_be_bytes());
+    session.extend(tpm2b(nonce));
+    session.push(0x01); // TPMA_SESSION_CONTINUESESSION
+    session.extend(tpm2b_empty());
+    session
+}
+
+/// TPM2_StartAuthSession for an unbound policy session.
+pub fn start_auth_session_policy(nonce_caller: &[u8]) -> Vec<u8> {
+    let mut params = Vec::new();
+    params.extend_from_slice(&TPM_RH_NULL.to_be_bytes());
+    params.extend_from_slice(&TPM_RH_NULL.to_be_bytes());
+    params.extend(tpm2b(nonce_caller));
+    params.extend(tpm2b_empty()); // encryptedSalt
+    params.push(TPM_SE_POLICY);
+    params.extend(sym_def_aes128_cfb());
+    params.extend_from_slice(&u16(TPM_ALG_SHA256));
+    command(TPM_ST_NO_SESSIONS, 0x0000_0176, &params)
 }
 
 /// Default symmetric wrapper for restricted storage keys: AES-128-CFB.

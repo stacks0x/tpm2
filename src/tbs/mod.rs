@@ -1,6 +1,11 @@
+#[cfg(test)]
+pub mod hw_test;
+
 pub mod commands;
+pub mod credential;
 pub mod error;
 pub mod keys;
+pub mod make_credential_sw;
 pub mod nv;
 pub mod parse;
 pub mod pcr;

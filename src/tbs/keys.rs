@@ -1,6 +1,6 @@
 //! Key lifecycle: CreatePrimary, Create (AK), Load, FlushContext.
 
-use crate::tbs::commands::{create_primary_owner, flush_context, object_handle_from_response, PrimaryKind};
+use crate::tbs::commands::{create_primary_owner, flush_handle, object_handle_from_response, PrimaryKind};
 use crate::tbs::error::{check_tpm_rc, TpmOpError, TpmResult};
 use crate::tbs::parse::ResponseParser;
 use crate::tbs::wire::{
@@ -17,6 +17,12 @@ const TPM_ECC_NIST_P256: u16 = 0x0003;
 
 /// Matches tpm2_create defaults for `ecc` signing keys under a storage primary.
 const AK_OBJECT_ATTRIBUTES: u32 = 0x0006_0072;
+
+#[derive(Debug, Clone)]
+pub struct ProvisionAkResult {
+    pub ak_public_der: Vec<u8>,
+    pub ak_blob: AkBlob,
+}
 
 #[derive(Debug, Clone)]
 pub struct AkBlob {
@@ -117,9 +123,7 @@ pub fn load_ak(parent: u32, blob: &AkBlob) -> TpmResult<LoadedKey> {
 }
 
 pub fn flush_transient(handle: u32) -> TpmResult<()> {
-    let resp = submit_tpm_command(&flush_context(handle)).map_err(TpmOpError::transport)?;
-    check_tpm_rc(&resp, "FlushContext")?;
-    Ok(())
+    flush_handle(handle)
 }
 
 /// Provision a wrapped AK blob under a freshly created storage primary; flushes the primary.
@@ -130,10 +134,19 @@ pub fn provision_ak_blob() -> TpmResult<AkBlob> {
     Ok(blob)
 }
 
+/// Provision AK and return SPKI DER + wrapped blob (spec §4.3 `provisionAk`).
+pub fn provision_ak() -> TpmResult<ProvisionAkResult> {
+    let ak_blob = provision_ak_blob()?;
+    let ak_public_der = crate::tbs::read_public::public_wire_to_spki_der(&ak_blob.public)?;
+    Ok(ProvisionAkResult {
+        ak_public_der,
+        ak_blob,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::Path;
 
     #[test]
     fn ak_public_template_size() {
@@ -145,7 +158,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn linux_ak_blob_roundtrip() {
-        if !Path::new("/dev/tpmrm0").exists() {
+        if !crate::tbs::hw_test::enabled() {
             return;
         }
         let primary = create_storage_primary().expect("CreatePrimary");

@@ -99,7 +99,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn linux_pcr_read_roundtrip() {
-        if !Path::new("/dev/tpmrm0").exists() {
+        if !crate::tbs::hw_test::enabled() {
             return;
         }
         let pcrs = pcr_read(&[0, 1, 7], PcrBank::Sha256).expect("pcr_read");

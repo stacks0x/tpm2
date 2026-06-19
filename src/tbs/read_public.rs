@@ -12,6 +12,8 @@ const TPM_ALG_ECC: u16 = 0x0023;
 
 pub struct ReadPublicResult {
     pub public_key_der: Vec<u8>,
+    /// TPM2B_PUBLIC wire (size prefix + TPMT_PUBLIC), for LoadExternal.
+    pub public_wire: Vec<u8>,
     pub name: Vec<u8>,
 }
 
@@ -31,14 +33,31 @@ pub fn read_public(handle: u32) -> TpmResult<ReadPublicResult> {
     let name = parser.read_tpm2b()?;
     let _qualified_name = parser.read_tpm2b()?;
 
+    let mut public_wire = Vec::with_capacity(2 + out_public.len());
+    public_wire.extend_from_slice(&(out_public.len() as u16).to_be_bytes());
+    public_wire.extend_from_slice(&out_public);
+
     let public_key_der = tpm2b_public_to_spki_der(&out_public)?;
     Ok(ReadPublicResult {
         public_key_der,
+        public_wire,
         name,
     })
 }
 
-fn tpm2b_public_to_spki_der(public: &[u8]) -> TpmResult<Vec<u8>> {
+/// Decode inner TPMT_PUBLIC from a TPM2B wire blob (size prefix + payload).
+pub fn public_wire_to_spki_der(wire: &[u8]) -> TpmResult<Vec<u8>> {
+    if wire.len() < 2 {
+        return Err(TpmOpError::other("AK public wire blob too short"));
+    }
+    let size = u16::from_be_bytes([wire[0], wire[1]]) as usize;
+    if wire.len() < 2 + size {
+        return Err(TpmOpError::other("truncated AK public wire blob"));
+    }
+    tpm2b_public_to_spki_der(&wire[2..2 + size])
+}
+
+pub fn tpm2b_public_to_spki_der(public: &[u8]) -> TpmResult<Vec<u8>> {
     if public.len() < 4 {
         return Err(TpmOpError::other("TPM2B_PUBLIC too short"));
     }

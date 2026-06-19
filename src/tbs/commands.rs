@@ -13,6 +13,7 @@ const TPM_CC_FLUSH_CONTEXT: u32 = 0x0000_0165;
 const TPM_CC_GET_CAPABILITY: u32 = 0x0000_017A;
 const TPM_CC_GET_RANDOM: u32 = 0x0000_017B;
 const TPM_RH_OWNER: u32 = 0x4000_0001;
+const TPM_RH_ENDORSEMENT: u32 = 0x4000_000B;
 
 const TPM_CAP_HANDLES: u32 = 0x0000_0001;
 /// First transient-object handle (`TPM_HT_TRANSIENT << 24`).
@@ -46,13 +47,36 @@ pub fn is_transient_object_handle(handle: u32) -> bool {
     handle & 0xFF00_0000 == 0x8000_0000
 }
 
-/// TPM2_FlushContext — only safe for transient handles this process just loaded.
+/// TPM_HT_TRANSIENT object, HMAC/policy session, or saved session handle.
+pub fn is_flush_context_handle(handle: u32) -> bool {
+    matches!(
+        handle & 0xFF00_0000,
+        0x8000_0000 | 0x0200_0000 | 0x0300_0000
+    )
+}
+
+/// TPM2_FlushContext — only transient objects and auth sessions (never persistent keys).
 pub fn flush_context(handle: u32) -> Vec<u8> {
     debug_assert!(
-        is_transient_object_handle(handle),
-        "FlushContext must target a transient object handle, not persistent or permanent handles"
+        is_flush_context_handle(handle),
+        "FlushContext must target a transient object or session handle"
     );
     command(TPM_ST_NO_SESSIONS, TPM_CC_FLUSH_CONTEXT, &u32(handle))
+}
+
+/// Submit FlushContext after refusing persistent / permanent handles.
+pub fn flush_handle(handle: u32) -> crate::tbs::error::TpmResult<()> {
+    use crate::tbs::error::{check_tpm_rc, TpmOpError, TpmResult};
+    use crate::tbs::submit_tpm_command;
+
+    if !is_flush_context_handle(handle) {
+        return Err(TpmOpError::other(format!(
+            "refusing FlushContext on handle 0x{handle:08X} (not a transient object or session)"
+        )));
+    }
+    let resp = submit_tpm_command(&flush_context(handle)).map_err(TpmOpError::transport)?;
+    check_tpm_rc(&resp, "FlushContext")?;
+    Ok(())
 }
 
 /// TPM2_GetCapability for loaded transient object handles.
@@ -166,12 +190,21 @@ fn create_primary_params(public: Vec<u8>) -> Vec<u8> {
 
 /// Owner-hierarchy CreatePrimary with null auth via password session.
 pub fn create_primary_owner(kind: PrimaryKind) -> Vec<u8> {
+    create_primary_on_hierarchy(TPM_RH_OWNER, kind)
+}
+
+/// Endorsement-hierarchy CreatePrimary (EK surrogate when no persistent EK exists).
+pub fn create_primary_endorsement(kind: PrimaryKind) -> Vec<u8> {
+    create_primary_on_hierarchy(TPM_RH_ENDORSEMENT, kind)
+}
+
+fn create_primary_on_hierarchy(hierarchy: u32, kind: PrimaryKind) -> Vec<u8> {
     let public = match kind {
         PrimaryKind::Rsa2048 => public_rsa2048_storage_primary(),
         PrimaryKind::EccP256 => public_ecc_p256_storage_primary(),
     };
     let params = create_primary_params(public);
-    command_with_password_session(TPM_RH_OWNER, TPM_CC_CREATE_PRIMARY, &params)
+    command_with_password_session(hierarchy, TPM_CC_CREATE_PRIMARY, &params)
 }
 
 /// ECC first (swtpm preference), then RSA fallback.
@@ -326,7 +359,7 @@ mod tests {
 
         use crate::tbs::submit_tpm_command;
 
-        if !Path::new("/dev/tpmrm0").exists() {
+        if !crate::tbs::hw_test::enabled() {
             return;
         }
 

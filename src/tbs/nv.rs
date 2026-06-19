@@ -80,7 +80,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn linux_read_ek_certificate() {
-        if !Path::new("/dev/tpmrm0").exists() {
+        if !crate::tbs::hw_test::enabled() {
             return;
         }
         let _ = read_ek_certificate();

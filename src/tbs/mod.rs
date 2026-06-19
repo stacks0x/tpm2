@@ -13,6 +13,7 @@ pub mod properties;
 pub mod quote;
 pub mod rc;
 pub mod read_public;
+pub mod session_hmac;
 pub mod wire;
 
 #[cfg(windows)]

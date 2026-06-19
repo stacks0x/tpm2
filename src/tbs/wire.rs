@@ -72,14 +72,11 @@ pub fn command_with_handles_and_session(
     command(TPM_ST_SESSIONS, code, &body)
 }
 
-/// Policy session auth area (empty nonce/HMAC during policy construction).
-pub fn policy_session_auth(session_handle: u32) -> Vec<u8> {
-    let mut session = Vec::with_capacity(4 + 2 + 1 + 2);
-    session.extend_from_slice(&session_handle.to_be_bytes());
-    session.extend(tpm2b_empty()); // nonceCaller
-    session.push(0x01); // TPMA_SESSION_CONTINUESESSION
-    session.extend(tpm2b_empty()); // authorization (HMAC) empty until policy completes
-    session
+/// Password session + policy/HMAC session auth area (PolicySecret on hierarchies).
+pub fn password_and_policy_sessions(policy_session: &[u8]) -> Vec<u8> {
+    let mut sessions = password_session_null_auth();
+    sessions.extend_from_slice(policy_session);
+    sessions
 }
 
 /// TPM2_StartAuthSession for an unbound policy session.

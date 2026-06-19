@@ -159,9 +159,18 @@ fn run_activate_credential() -> Result<(), String> {
 }
 
 fn run_policy_secret() -> Result<(), String> {
+    use node_tpm2::tbs::session_hmac::{
+        handle_name_for_cphash, policy_session_auth_area, random_nonce_32,
+        session_key_from_start, SessionAuthInput,
+    };
+
+    const TPM_CC_POLICY_SECRET: u32 = 0x0000_0151;
+    const TPM_RH_ENDORSEMENT: u32 = 0x4000_000B;
+    const TPMA_SESSION_CONTINUESESSION: u8 = 0x01;
+
     println!("== policy-secret (StartAuthSession + PolicySecret endorsement) ==");
-    let nonce_caller = [0x11u8; 32];
-    let cmd = node_tpm2::tbs::wire::start_auth_session_policy(&nonce_caller);
+    let start_nonce = random_nonce_32();
+    let cmd = node_tpm2::tbs::wire::start_auth_session_policy(&start_nonce);
     println!("  StartAuthSession cmd: {} bytes", cmd.len());
     let resp = node_tpm2::tbs::submit_tpm_command(&cmd).map_err(|e| e)?;
     let rc = tpm_rc_from_response(&resp).ok_or("short StartAuthSession response")?;
@@ -181,22 +190,42 @@ fn run_policy_secret() -> Result<(), String> {
     println!("  session handle: 0x{handle:08X}");
     println!("  nonceTPM: {} bytes", nonce_tpm.len());
 
+    let session_key = session_key_from_start(&nonce_tpm, &start_nonce);
+
     let mut params = Vec::new();
-    params.extend(node_tpm2::tbs::wire::tpm2b(&nonce_tpm));
+    params.extend(node_tpm2::tbs::wire::tpm2b_empty());
     params.extend(node_tpm2::tbs::wire::tpm2b_empty());
     params.extend(node_tpm2::tbs::wire::tpm2b_empty());
     params.extend_from_slice(&0i32.to_be_bytes());
-    let auth = node_tpm2::tbs::wire::policy_session_auth(handle);
+    let auth_name = handle_name_for_cphash(TPM_RH_ENDORSEMENT, None);
+    let session_name = handle_name_for_cphash(handle, None);
+    let cmd_nonce = random_nonce_32();
+    let policy_auth = policy_session_auth_area(SessionAuthInput {
+        session_handle: handle,
+        session_key: &session_key,
+        nonce_tpm: &nonce_tpm,
+        nonce_caller: &cmd_nonce,
+        command_code: TPM_CC_POLICY_SECRET,
+        handles: &[TPM_RH_ENDORSEMENT, handle],
+        handle_names: &[auth_name.as_slice(), session_name.as_slice()],
+        params: &params,
+        session_attributes: TPMA_SESSION_CONTINUESESSION,
+    });
     let ps_cmd = node_tpm2::tbs::wire::command_with_handles_and_session(
-        &[0x4000_000B],
-        &auth,
-        0x0000_016B,
+        &[TPM_RH_ENDORSEMENT, handle],
+        &policy_auth,
+        TPM_CC_POLICY_SECRET,
         &params,
     );
     println!("  PolicySecret cmd: {} bytes", ps_cmd.len());
+    if std::env::var_os("TPM2_DUMP_CMD").is_some() {
+        println!("  cmd hex: {}", ps_cmd.iter().map(|b| format!("{b:02x}")).collect::<String>());
+    }
     let ps_resp = node_tpm2::tbs::submit_tpm_command(&ps_cmd).map_err(|e| e)?;
     let ps_rc = tpm_rc_from_response(&ps_resp).ok_or("short PolicySecret response")?;
-    report_tpm_rc("PolicySecret", ps_rc)
+    let result = report_tpm_rc("PolicySecret", ps_rc);
+    let _ = node_tpm2::tbs::commands::flush_handle(handle);
+    result
 }
 
 fn flush_created_transient(handle: u32) -> Result<(), String> {

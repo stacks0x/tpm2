@@ -11,32 +11,58 @@ use crate::tbs::keys::{create_storage_primary, load_ak, AkBlob};
 use crate::tbs::make_credential_sw;
 use crate::tbs::parse::ResponseParser;
 use crate::tbs::read_public::read_public;
-use crate::tbs::wire::{
-    command_with_handles_and_session, policy_session_auth, start_auth_session_policy, tpm2b,
+use crate::tbs::session_hmac::{
+    handle_name_for_cphash, policy_session_auth_area, random_nonce_32, session_key_from_start,
+    SessionAuthInput,
 };
+use crate::tbs::wire::{command_with_handles_and_session, start_auth_session_policy, tpm2b};
 use crate::tbs::submit_tpm_command;
 
 const TPM_ST_SESSIONS: u16 = 0x8002;
-const TPM_CC_POLICY_SECRET: u32 = 0x0000_016B;
+const TPM_CC_POLICY_SECRET: u32 = 0x0000_0151;
 const TPM_CC_POLICY_COMMAND_CODE: u32 = 0x0000_016C;
 const TPM_CC_ACTIVATE_CREDENTIAL: u32 = 0x0000_0147;
 const TPM_RH_ENDORSEMENT: u32 = 0x4000_000B;
 const PERSISTENT_EK_RSA: u32 = 0x8101_0001;
 const PERSISTENT_EK_ECC: u32 = 0x8101_0002;
+const TPMA_SESSION_CONTINUESESSION: u8 = 0x01;
 
 struct PolicySession {
     handle: u32,
     nonce_tpm: Vec<u8>,
+    session_key: [u8; 32],
 }
 
 impl PolicySession {
     fn flush(self) -> TpmResult<()> {
         flush_handle(self.handle)
     }
+
+    fn auth_area(
+        &self,
+        command_code: u32,
+        handles: &[u32],
+        handle_names: &[&[u8]],
+        params: &[u8],
+    ) -> Vec<u8> {
+        let nonce_caller = random_nonce_32();
+        policy_session_auth_area(SessionAuthInput {
+            session_handle: self.handle,
+            session_key: &self.session_key,
+            nonce_tpm: &self.nonce_tpm,
+            nonce_caller: &nonce_caller,
+            command_code,
+            handles,
+            handle_names,
+            params,
+            session_attributes: TPMA_SESSION_CONTINUESESSION,
+        })
+    }
 }
 
 struct EkHandle {
     handle: u32,
+    name: Vec<u8>,
     owned: bool,
 }
 
@@ -49,8 +75,16 @@ impl EkHandle {
     }
 }
 
+fn flush_stale_policy_sessions() {
+    for slot in 0x10..0x40u32 {
+        let _ = flush_handle(0x0300_0000 | slot);
+        let _ = flush_handle(0x0200_0000 | (slot + 1));
+    }
+}
+
 fn start_policy_session() -> TpmResult<PolicySession> {
-    let nonce_caller = [0x11u8; 32];
+    flush_stale_policy_sessions();
+    let nonce_caller = random_nonce_32();
     let cmd = start_auth_session_policy(&nonce_caller);
     let resp = submit_tpm_command(&cmd).map_err(TpmOpError::transport)?;
     check_tpm_rc(&resp, "StartAuthSession")?;
@@ -63,19 +97,31 @@ fn start_policy_session() -> TpmResult<PolicySession> {
         let _ = parser.read_u32()?; // parameter size
     }
     let nonce_tpm = parser.read_tpm2b()?;
-    Ok(PolicySession { handle, nonce_tpm })
+    let session_key = session_key_from_start(&nonce_tpm, &nonce_caller);
+    Ok(PolicySession {
+        handle,
+        nonce_tpm,
+        session_key,
+    })
 }
 
 fn policy_secret(session: &PolicySession, auth_handle: u32) -> TpmResult<()> {
     let mut params = Vec::new();
-    params.extend(tpm2b(&session.nonce_tpm));
+    params.extend(tpm2b_empty()); // nonceTPM (empty: no policy timeout binding)
     params.extend(tpm2b_empty()); // cpHashA
     params.extend(tpm2b_empty()); // policyRef
     params.extend_from_slice(&0i32.to_be_bytes()); // expiration (0 = no timeout)
-    let auth = policy_session_auth(session.handle);
+    let auth_name = handle_name_for_cphash(auth_handle, None);
+    let session_name = handle_name_for_cphash(session.handle, None);
+    let policy_auth = session.auth_area(
+        TPM_CC_POLICY_SECRET,
+        &[auth_handle, session.handle],
+        &[auth_name.as_slice(), session_name.as_slice()],
+        &params,
+    );
     let cmd = command_with_handles_and_session(
-        &[auth_handle],
-        &auth,
+        &[auth_handle, session.handle],
+        &policy_auth,
         TPM_CC_POLICY_SECRET,
         &params,
     );
@@ -87,8 +133,19 @@ fn policy_secret(session: &PolicySession, auth_handle: u32) -> TpmResult<()> {
 fn policy_command_code(session: &PolicySession, command_code: u32) -> TpmResult<()> {
     let mut params = Vec::new();
     params.extend_from_slice(&command_code.to_be_bytes());
-    let auth = policy_session_auth(session.handle);
-    let cmd = command_with_handles_and_session(&[], &auth, TPM_CC_POLICY_COMMAND_CODE, &params);
+    let session_name = handle_name_for_cphash(session.handle, None);
+    let policy_auth = session.auth_area(
+        TPM_CC_POLICY_COMMAND_CODE,
+        &[session.handle],
+        &[session_name.as_slice()],
+        &params,
+    );
+    let cmd = command_with_handles_and_session(
+        &[session.handle],
+        &policy_auth,
+        TPM_CC_POLICY_COMMAND_CODE,
+        &params,
+    );
     let resp = submit_tpm_command(&cmd).map_err(TpmOpError::transport)?;
     check_tpm_rc(&resp, "PolicyCommandCode")?;
     Ok(())
@@ -99,15 +156,17 @@ fn tpm2b_empty() -> Vec<u8> {
 }
 
 fn resolve_ek() -> TpmResult<EkHandle> {
-    if read_public(PERSISTENT_EK_RSA).is_ok() {
+    if let Ok(rp) = read_public(PERSISTENT_EK_RSA) {
         return Ok(EkHandle {
             handle: PERSISTENT_EK_RSA,
+            name: rp.name,
             owned: false,
         });
     }
-    if read_public(PERSISTENT_EK_ECC).is_ok() {
+    if let Ok(rp) = read_public(PERSISTENT_EK_ECC) {
         return Ok(EkHandle {
             handle: PERSISTENT_EK_ECC,
+            name: rp.name,
             owned: false,
         });
     }
@@ -116,8 +175,10 @@ fn resolve_ek() -> TpmResult<EkHandle> {
     check_tpm_rc(&resp, "CreatePrimary endorsement")?;
     let handle = object_handle_from_response(&resp)
         .ok_or_else(|| TpmOpError::other("CreatePrimary endorsement: missing handle"))?;
+    let name = read_public(handle)?.name;
     Ok(EkHandle {
         handle,
+        name,
         owned: true,
     })
 }
@@ -143,7 +204,9 @@ fn resolve_ek_public_wire() -> TpmResult<Vec<u8>> {
 
 fn activate_credential(
     activate_handle: u32,
+    activate_name: &[u8],
     key_handle: u32,
+    key_name: &[u8],
     session: &PolicySession,
     credential_blob: &[u8],
     secret: &[u8],
@@ -151,10 +214,17 @@ fn activate_credential(
     let mut params = Vec::new();
     params.extend(tpm2b(credential_blob));
     params.extend(tpm2b(secret));
-    let auth = policy_session_auth(session.handle);
+    let activate_name = handle_name_for_cphash(activate_handle, Some(activate_name));
+    let key_name = handle_name_for_cphash(key_handle, Some(key_name));
+    let policy_auth = session.auth_area(
+        TPM_CC_ACTIVATE_CREDENTIAL,
+        &[activate_handle, key_handle],
+        &[activate_name.as_slice(), key_name.as_slice()],
+        &params,
+    );
     let cmd = command_with_handles_and_session(
         &[activate_handle, key_handle],
-        &auth,
+        &policy_auth,
         TPM_CC_ACTIVATE_CREDENTIAL,
         &params,
     );
@@ -173,13 +243,22 @@ pub fn activate_credential_with_ak_blob(
 ) -> TpmResult<Vec<u8>> {
     let primary = create_storage_primary()?;
     let ak = load_ak(primary.handle, ak_blob)?;
+    let ak_name = read_public(ak.handle)?.name;
     let ek = resolve_ek()?;
     let session = start_policy_session()?;
 
     let result = (|| {
         policy_secret(&session, TPM_RH_ENDORSEMENT)?;
         policy_command_code(&session, TPM_CC_ACTIVATE_CREDENTIAL)?;
-        activate_credential(ak.handle, ek.handle, &session, credential_blob, secret)
+        activate_credential(
+            ak.handle,
+            &ak_name,
+            ek.handle,
+            &ek.name,
+            &session,
+            credential_blob,
+            secret,
+        )
     })();
 
     let _ = ak.flush();
@@ -193,6 +272,7 @@ pub fn activate_credential_with_ak_blob(
 pub fn credential_roundtrip_self_test(ak_blob: &AkBlob) -> TpmResult<Vec<u8>> {
     let primary = create_storage_primary()?;
     let ak = load_ak(primary.handle, ak_blob)?;
+    let ak_name = read_public(ak.handle)?.name;
     let ek = resolve_ek()?;
     let ek_public_wire = resolve_ek_public_wire()?;
     let name = read_public(ak.handle)?.name;
@@ -205,7 +285,9 @@ pub fn credential_roundtrip_self_test(ak_blob: &AkBlob) -> TpmResult<Vec<u8>> {
         policy_command_code(&session, TPM_CC_ACTIVATE_CREDENTIAL)?;
         activate_credential(
             ak.handle,
+            &ak_name,
             ek.handle,
+            &ek.name,
             &session,
             &made.credential_blob,
             &made.secret,

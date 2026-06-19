@@ -587,9 +587,11 @@ if (!nativeBinding) {
 }
 
 module.exports = nativeBinding
+module.exports.activateCredential = nativeBinding.activateCredential
 module.exports.getFixedProperties = nativeBinding.getFixedProperties
 module.exports.isAvailable = nativeBinding.isAvailable
 module.exports.pcrRead = nativeBinding.pcrRead
+module.exports.provisionAk = nativeBinding.provisionAk
 module.exports.quote = nativeBinding.quote
 module.exports.readEkCertificate = nativeBinding.readEkCertificate
 module.exports.readPublic = nativeBinding.readPublic

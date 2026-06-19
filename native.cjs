@@ -128,8 +128,8 @@ function requireNative() {
         loadErrors.push(e)
       }
       try {
-        const binding = require('node-tpm2-win32-x64-msvc')
-        const bindingPackageVersion = require('node-tpm2-win32-x64-msvc/package.json').version
+        const binding = require('node-tpm2-windows-x64-msvc')
+        const bindingPackageVersion = require('node-tpm2-windows-x64-msvc/package.json').version
         if (bindingPackageVersion !== '0.0.3' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
           throw new Error(`Native binding package version mismatch, expected 0.0.3 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
         }
@@ -161,8 +161,8 @@ function requireNative() {
         loadErrors.push(e)
       }
       try {
-        const binding = require('node-tpm2-win32-arm64-msvc')
-        const bindingPackageVersion = require('node-tpm2-win32-arm64-msvc/package.json').version
+        const binding = require('node-tpm2-windows-arm64-msvc')
+        const bindingPackageVersion = require('node-tpm2-windows-arm64-msvc/package.json').version
         if (bindingPackageVersion !== '0.0.3' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
           throw new Error(`Native binding package version mismatch, expected 0.0.3 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
         }

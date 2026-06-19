@@ -87,6 +87,8 @@ jobs:
           path: artifacts
       - name: Stage platform packages
         run: npm run artifacts
+      - name: Patch Windows npm package names
+        run: npm run patch-windows-npm
       - name: List staged packages
         run: ls -R npm
       - name: Publish platform packages
@@ -99,8 +101,6 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
       - name: Verify native loader is present
         run: test -f native.cjs && test -f native.d.ts
-      - name: Sync optionalDependencies for main package
-        run: npm run prepublishOnly
       - name: Publish node-tpm2
         run: npm publish --access public --provenance
         env:

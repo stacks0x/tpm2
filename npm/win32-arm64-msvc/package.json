@@ -1,6 +1,6 @@
 {
-  "name": "node-tpm2-win32-arm64-msvc",
-  "version": "0.0.2",
+  "name": "node-tpm2-windows-arm64-msvc",
+  "version": "0.0.3",
   "cpu": [
     "arm64"
   ],

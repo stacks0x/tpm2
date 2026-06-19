@@ -1,6 +1,6 @@
 {
   "name": "node-tpm2",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "description": "Native TPM 2.0 for Node. Zero tooling, no admin. Windows (TBS) and Linux (/dev/tpmrm0). Pre-release.",
   "type": "module",
   "license": "Apache-2.0",
@@ -59,23 +59,25 @@
     "build": "napi build --platform --release --js native.cjs --dts native.d.ts",
     "build:debug": "napi build --platform --js native.cjs --dts native.d.ts",
     "build:esapi": "napi build --platform --release --features esapi --js native.cjs --dts native.d.ts",
-    "tbs-probe": "cargo run --bin tbs-probe",
+    "tbs-probe": "cargo run --bin tbs-probe --no-default-features --features probe-bin --",
     "spike": "cargo run --features esapi --bin spike --",
     "spike:all": "cargo run --features esapi --bin spike -- all",
     "artifacts": "napi artifacts",
-    "create-npm-dirs": "napi create-npm-dirs",
+    "patch-windows-npm": "node scripts/patch-windows-npm-packages.mjs",
     "prepublishOnly": "napi prepublish -t npm --skip-optional-publish"
   },
   "devDependencies": {
     "@napi-rs/cli": "^3.7.2"
   },
   "optionalDependencies": {
-    "node-tpm2-win32-x64-msvc": "0.0.2",
-    "node-tpm2-win32-arm64-msvc": "0.0.2",
-    "node-tpm2-linux-x64-gnu": "0.0.2",
-    "node-tpm2-linux-arm64-gnu": "0.0.2",
-    "node-tpm2-linux-x64-musl": "0.0.2",
-    "node-tpm2-linux-arm64-musl": "0.0.2",
-    "node-tpm2-darwin-arm64": "0.0.2"
+    "node-tpm2-windows-x64-msvc": "0.0.3",
+    "node-tpm2-windows-arm64-msvc": "0.0.3",
+    "node-tpm2-linux-x64-gnu": "0.0.3",
+    "node-tpm2-linux-arm64-gnu": "0.0.3",
+    "node-tpm2-linux-x64-musl": "0.0.3",
+    "node-tpm2-linux-arm64-musl": "0.0.3",
+    "node-tpm2-darwin-arm64": "0.0.3",
+    "node-tpm2-win32-x64-msvc": "0.0.3",
+    "node-tpm2-win32-arm64-msvc": "0.0.3"
   }
 }

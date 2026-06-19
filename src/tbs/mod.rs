@@ -1,6 +1,13 @@
 pub mod commands;
+pub mod error;
+pub mod keys;
+pub mod nv;
+pub mod parse;
+pub mod pcr;
 pub mod properties;
+pub mod quote;
 pub mod rc;
+pub mod read_public;
 pub mod wire;
 
 #[cfg(windows)]

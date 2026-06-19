@@ -1,22 +1,24 @@
-//! Phase 0 direct-TBS probes (Option B). Zero tss-esapi dependency.
+//! Direct-TBS validation probes (Option B). Linux and Windows, non-elevated.
 
-#[cfg(not(windows))]
-fn main() {
-    eprintln!("tbs-probe: Windows-only (non-elevated PowerShell on the Windows 11 VM)");
-    std::process::exit(2);
-}
+use node_tpm2::tbs::commands::{create_primary_candidates, get_random_8, tpm_rc_from_response, tpm_rc_name};
+use node_tpm2::tbs::parse::attest_extra_data;
+use node_tpm2::tbs::keys::provision_ak_blob;
+use node_tpm2::tbs::pcr::{pcr_read, PcrBank};
+use node_tpm2::tbs::quote::quote_with_ak_blob;
+use node_tpm2::tbs::rc::{classify_tpm_rc, describe_tpm_rc, RcClass};
 
-#[cfg(windows)]
 fn main() {
     let cmd = std::env::args().nth(1).unwrap_or_else(|| "all".to_string());
 
     let result = match cmd.as_str() {
         "get-random" => run_get_random(),
         "create-primary" => run_create_primary(),
+        "pcr-read" => run_pcr_read(),
+        "quote" => run_quote(),
         "all" => run_all(),
         other => {
             eprintln!("unknown command: {other}");
-            eprintln!("usage: tbs-probe [get-random|create-primary|all]");
+            eprintln!("usage: tbs-probe [get-random|create-primary|pcr-read|quote|all]");
             std::process::exit(2);
         }
     };
@@ -27,29 +29,23 @@ fn main() {
     }
 }
 
-#[cfg(windows)]
 fn run_all() -> Result<(), String> {
     run_get_random()?;
     run_create_primary()?;
+    run_pcr_read()?;
+    run_quote()?;
     println!("\ntbs-probe: all checks passed");
     Ok(())
 }
 
-#[cfg(windows)]
 fn run_get_random() -> Result<(), String> {
-    use node_tpm2::tbs::commands::{get_random_8, tpm_rc_from_response};
-
     println!("== get-random ==");
     let resp = node_tpm2::tbs::submit_tpm_command(&get_random_8())?;
     let rc = tpm_rc_from_response(&resp).ok_or("short TPM response")?;
     report_tpm_rc("GetRandom", rc)
 }
 
-#[cfg(windows)]
 fn run_create_primary() -> Result<(), String> {
-    use node_tpm2::tbs::commands::{create_primary_candidates, tpm_rc_from_response, tpm_rc_name};
-    use node_tpm2::tbs::rc::{classify_tpm_rc, describe_tpm_rc, RcClass};
-
     println!("== create-primary (owner hierarchy, null auth, password session) ==");
 
     for (label, cmd) in create_primary_candidates() {
@@ -92,11 +88,46 @@ fn run_create_primary() -> Result<(), String> {
     Err("CreatePrimary failed for all templates".to_string())
 }
 
-#[cfg(windows)]
+fn run_pcr_read() -> Result<(), String> {
+    println!("== pcr-read ==");
+    let pcrs = pcr_read(&[0, 1, 7], PcrBank::Sha256).map_err(|e| e.message)?;
+    for idx in [0u32, 1, 7] {
+        let digest = pcrs.get(&idx).ok_or_else(|| format!("missing PCR {idx}"))?;
+        println!("  PCR {idx}: {digest}");
+    }
+    println!("  PASS  PCR_Read returned SHA-256 digests for [0, 1, 7]");
+    Ok(())
+}
+
+fn run_quote() -> Result<(), String> {
+    println!("== quote (wrapped AK blob, qualifyingData -> extraData) ==");
+
+    let blob = provision_ak_blob().map_err(|e| e.message)?;
+    println!(
+        "  ak blob: public={} bytes, private={} bytes",
+        blob.public.len(),
+        blob.private.len()
+    );
+
+    let qualifying = b"node-tpm2-tbs-probe-qualifying-data";
+    let result = quote_with_ak_blob(&blob, &[0, 1, 7], qualifying, PcrBank::Sha256)
+        .map_err(|e| e.message)?;
+
+    println!("  quote message: {} bytes", result.message.len());
+    println!("  quote signature: {} bytes", result.signature.len());
+
+    let extra = attest_extra_data(&result.message).ok_or("extraData not found in TPMS_ATTEST")?;
+    if extra != qualifying.as_slice() {
+        return Err("qualifyingData does not round-trip in TPMS_ATTEST.extraData".to_string());
+    }
+    println!("  PASS  qualifyingData round-trips in extraData");
+    Ok(())
+}
+
 fn flush_created_transient(handle: u32) -> Result<(), String> {
     use node_tpm2::tbs::commands::{
-        flush_context, get_capability_transient_handles, is_transient_object_handle,
-        transient_handles_from_getcap, tpm_rc_from_response,
+        get_capability_transient_handles, is_transient_object_handle,
+        transient_handles_from_getcap,
     };
 
     if !is_transient_object_handle(handle) {
@@ -108,7 +139,6 @@ fn flush_created_transient(handle: u32) -> Result<(), String> {
     let mut flushed = try_flush_handle(handle)?;
 
     if !flushed {
-        // Fallback: flush every transient handle the TPM reports (same TBS context).
         if let Ok(cap_resp) = node_tpm2::tbs::submit_tpm_command(&get_capability_transient_handles())
         {
             if let Some(handles) = transient_handles_from_getcap(&cap_resp) {
@@ -126,13 +156,12 @@ fn flush_created_transient(handle: u32) -> Result<(), String> {
     } else {
         eprintln!(
             "  WARN  FlushContext failed for handle 0x{handle:08X} \
-             (TPM_RC_HANDLE — transient may leak; Windows TBS requires one context per process)"
+             (transient may leak until context closes)"
         );
     }
     Ok(())
 }
 
-#[cfg(windows)]
 fn try_flush_handle(handle: u32) -> Result<bool, String> {
     use node_tpm2::tbs::commands::{flush_context, tpm_rc_from_response};
 
@@ -141,10 +170,7 @@ fn try_flush_handle(handle: u32) -> Result<bool, String> {
     Ok(rc == 0)
 }
 
-#[cfg(windows)]
 fn report_tpm_rc(op: &str, rc: u32) -> Result<(), String> {
-    use node_tpm2::tbs::rc::{classify_tpm_rc, describe_tpm_rc, RcClass};
-
     let class = classify_tpm_rc(rc);
     println!("  {op} TPM_RC: 0x{rc:08X} ({})", describe_tpm_rc(rc));
     match class {
@@ -164,5 +190,18 @@ fn report_tpm_rc(op: &str, rc: u32) -> Result<(), String> {
             println!("  FAIL  unexpected TPM error");
             Err(format!("{op} failed 0x{rc:08X}"))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use node_tpm2::tbs::parse::attest_extra_data;
+
+    #[test]
+    fn extra_data_slice() {
+        let mut msg = vec![0u8; 6];
+        msg.extend_from_slice(&[0x00, 0x04, b'a', b'b', b'c', b'd']);
+        msg.extend_from_slice(&[0x00, 0x03, b'x', b'y', b'z']);
+        assert_eq!(attest_extra_data(&msg), Some(b"xyz".as_slice()));
     }
 }

@@ -6,8 +6,9 @@ Native TPM 2.0 for Node. Zero tooling, no admin.
 - Direct TBS command marshalling — no tpm2-tss, no tpm2-tools at install or runtime.
 - Ships as prebuilt native binaries via napi-rs platform packages.
 
-> **Status: pre-release.** `Tpm.isAvailable()` and `Tpm.info()` work on Windows and Linux.
-> `Tpm.open()` and attestation methods are not implemented yet.
+> **Status: pre-release.** `Tpm.isAvailable()`, `Tpm.info()`, `Tpm.open().pcr.read()`,
+> `readPublic`, `readEkCertificate`, and `quote` work on Windows and Linux.
+> `provisionAk` and credential activation are not implemented yet.
 
 ## Install
 

@@ -91,15 +91,39 @@ fn looks_like_session_auth_area(resp: &[u8], offset: usize, size: usize) -> bool
     matches!((handle >> 24) & 0xFF, 0x02 | 0x03)
 }
 
-/// `nonceTPM` from a successful `StartAuthSession` response (handle + param size + TPM2B).
+/// `nonceTPM` from a successful `StartAuthSession` response.
+///
+/// Layout A (Linux tpmrm0): handle, parameterAreaSize, TPM2B nonceTPM  
+/// Layout B (Windows TBS): handle, TPM2B nonceTPM (no parameterAreaSize)
 pub fn start_auth_session_nonce_tpm(resp: &[u8]) -> TpmResult<Vec<u8>> {
-    if resp.len() < 18 {
+    if resp.len() < 16 {
         return Err(TpmOpError::other("StartAuthSession response too short"));
     }
+    let skip = start_auth_session_skip_param_size(resp);
+    parse_start_auth_session_nonce(resp, skip)
+        .or_else(|_| parse_start_auth_session_nonce(resp, !skip))
+}
+
+fn start_auth_session_skip_param_size(resp: &[u8]) -> bool {
+    if resp.len() < 16 {
+        return true;
+    }
+    let u16_at_14 = u16::from_be_bytes([resp[14], resp[15]]);
+    // nonceTPM is 16–32 bytes; at offset 14 a TPM2B size is 0x0010–0x0020.
+    !(u16_at_14 >= 16 && u16_at_14 <= 32 && 16 + u16_at_14 as usize <= resp.len())
+}
+
+fn parse_start_auth_session_nonce(resp: &[u8], skip_param_size: bool) -> TpmResult<Vec<u8>> {
     let mut parser = ResponseParser::after_rc(resp)?;
     let _ = parser.read_u32()?; // session handle
-    let _ = parser.read_u32()?; // parameter area size
-    parser.read_tpm2b()
+    if skip_param_size {
+        let _ = parser.read_u32()?;
+    }
+    let nonce = parser.read_tpm2b()?;
+    if nonce.is_empty() {
+        return Err(TpmOpError::other("StartAuthSession: empty nonceTPM"));
+    }
+    Ok(nonce)
 }
 
 /// Parameter area for responses with **no** response handles.
@@ -217,17 +241,31 @@ mod tests {
     }
 
     #[test]
-    fn start_auth_session_nonce_no_sessions_tag() {
-        let body_len = 4 + 4 + 2 + 32; // handle + param size + TPM2B nonce
-        let total = 10 + body_len;
+    fn start_auth_session_nonce_direct_tpm2b() {
+        let total: u32 = 10 + 4 + 2 + 32;
         let mut resp = Vec::new();
-        resp.extend_from_slice(&[0x80, 0x01]); // TPM_ST_NO_SESSIONS
-        resp.extend_from_slice(&(total as u32).to_be_bytes());
-        resp.extend_from_slice(&0u32.to_be_bytes()); // rc
-        resp.extend_from_slice(&0x0300_0014u32.to_be_bytes()); // handle
-        resp.extend_from_slice(&(body_len as u32).to_be_bytes()); // param size
-        resp.extend_from_slice(&[0x00, 0x20]); // TPM2B size
-        resp.extend_from_slice(&[0xAAu8; 32]); // nonce
+        resp.extend_from_slice(&[0x80, 0x01]);
+        resp.extend_from_slice(&total.to_be_bytes());
+        resp.extend_from_slice(&0u32.to_be_bytes());
+        resp.extend_from_slice(&0x0300_0014u32.to_be_bytes());
+        resp.extend_from_slice(&[0x00, 0x20]);
+        resp.extend_from_slice(&[0xBBu8; 32]);
+        let nonce = start_auth_session_nonce_tpm(&resp).expect("nonce");
+        assert_eq!(nonce, vec![0xBB; 32]);
+    }
+
+    #[test]
+    fn start_auth_session_nonce_with_param_size() {
+        let body: u32 = 2 + 32;
+        let total: u32 = 10 + 4 + 4 + body;
+        let mut resp = Vec::new();
+        resp.extend_from_slice(&[0x80, 0x01]);
+        resp.extend_from_slice(&total.to_be_bytes());
+        resp.extend_from_slice(&0u32.to_be_bytes());
+        resp.extend_from_slice(&0x0300_0014u32.to_be_bytes());
+        resp.extend_from_slice(&body.to_be_bytes());
+        resp.extend_from_slice(&[0x00, 0x20]);
+        resp.extend_from_slice(&[0xAAu8; 32]);
         let nonce = start_auth_session_nonce_tpm(&resp).expect("nonce");
         assert_eq!(nonce, vec![0xAA; 32]);
     }

@@ -76,33 +76,57 @@ impl<'a> ResponseParser<'a> {
     }
 }
 
-/// `nonceTPM` from a successful `StartAuthSession` response (handle area + param size + TPM2B).
+const MIN_SESSION_AUTH_BYTES: usize = 9;
+
+fn looks_like_session_auth_area(resp: &[u8], offset: usize, size: usize) -> bool {
+    if size < MIN_SESSION_AUTH_BYTES || offset + 4 > resp.len() {
+        return false;
+    }
+    let handle = u32::from_be_bytes([
+        resp[offset],
+        resp[offset + 1],
+        resp[offset + 2],
+        resp[offset + 3],
+    ]);
+    matches!((handle >> 24) & 0xFF, 0x02 | 0x03)
+}
+
+/// `nonceTPM` from a successful `StartAuthSession` response (handle + param size + TPM2B).
 pub fn start_auth_session_nonce_tpm(resp: &[u8]) -> TpmResult<Vec<u8>> {
     if resp.len() < 18 {
         return Err(TpmOpError::other("StartAuthSession response too short"));
     }
-    let tag = u16::from_be_bytes([resp[0], resp[1]]);
     let mut parser = ResponseParser::after_rc(resp)?;
     let _ = parser.read_u32()?; // session handle
-    if tag == TPM_ST_SESSIONS {
-        let auth_size = parser.read_u32()? as usize;
-        let _ = parser.read_bytes(auth_size)?;
-    }
     let _ = parser.read_u32()?; // parameter area size
     parser.read_tpm2b()
 }
 
-/// Parameter area of a response with **no** response handles (ReadPublic, Quote, etc.).
+/// Parameter area for responses with **no** response handles.
 ///
-/// Skips the UINT32 parameter-area size at offset 10. Does not interpret the session
-/// auth area on `TPM_ST_SESSIONS` responses — Windows TBS often omits it even when the
-/// tag is `0x8002` (Quote with a password session in the command).
+/// Windows TBS often uses `TPM_ST_SESSIONS` without marshaling a response auth area
+/// (Quote). When an auth area is present (ActivateCredential), it precedes the parameter
+/// size and starts with a session handle (`0x02…` / `0x03…`).
 pub fn parameters_after_rc(resp: &[u8]) -> TpmResult<ResponseParser<'_>> {
     if resp.len() < 14 {
         return Err(TpmOpError::other("TPM response too short"));
     }
+    let tag = u16::from_be_bytes([resp[0], resp[1]]);
     let mut parser = ResponseParser::after_rc(resp)?;
-    let _ = parser.read_u32()?; // parameter area size
+    if tag == TPM_ST_SESSIONS {
+        let first = parser.read_u32()? as usize;
+        if first >= MIN_SESSION_AUTH_BYTES
+            && first <= parser.remaining()
+            && looks_like_session_auth_area(resp, parser.offset, first)
+        {
+            let _ = parser.read_bytes(first)?;
+            let _ = parser.read_u32()?;
+        } else {
+            parser.offset = 14;
+        }
+    } else {
+        let _ = parser.read_u32()?;
+    }
     Ok(parser)
 }
 
@@ -175,6 +199,21 @@ mod tests {
     #[test]
     fn pcr_bitmap_indices() {
         assert_eq!(pcr_indices_from_bitmap(&[0x83, 0x00, 0x00]), vec![0, 1, 7]);
+    }
+
+    #[test]
+    fn parameters_after_rc_sessions_tag_no_auth_area() {
+        // Quote-style: TPM_ST_SESSIONS but param size immediately at offset 10.
+        let body: u32 = 6;
+        let total: u32 = 10 + 4 + 2 + 2;
+        let mut resp = Vec::new();
+        resp.extend_from_slice(&[0x80, 0x02]);
+        resp.extend_from_slice(&total.to_be_bytes());
+        resp.extend_from_slice(&0u32.to_be_bytes());
+        resp.extend_from_slice(&body.to_be_bytes()); // param size
+        resp.extend_from_slice(&[0x00, 0x02, b'h', b'i']);
+        let mut p = parameters_after_rc(&resp).expect("params");
+        assert_eq!(p.read_tpm2b().expect("tpm2b"), b"hi");
     }
 
     #[test]

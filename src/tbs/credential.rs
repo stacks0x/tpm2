@@ -263,29 +263,42 @@ pub fn activate_credential_with_ak_blob(
     result
 }
 
+fn step<T>(label: &str, result: TpmResult<T>) -> TpmResult<T> {
+    result.map_err(|e| TpmOpError::other(format!("{label}: {}", e.message)))
+}
+
 /// Self-contained roundtrip for probes: MakeCredential then ActivateCredential.
 pub fn credential_roundtrip_self_test(ak_blob: &AkBlob) -> TpmResult<Vec<u8>> {
-    let primary = create_storage_primary()?;
-    let ak = load_ak(primary.handle, ak_blob)?;
-    let ak_name = read_public(ak.handle)?.name;
-    let ek = resolve_ek()?;
-    let ek_public_wire = resolve_ek_public_wire()?;
-    let name = read_public(ak.handle)?.name;
+    let primary = step("CreatePrimary storage", create_storage_primary())?;
+    let ak = step("Load AK", load_ak(primary.handle, ak_blob))?;
+    let ak_name = step("ReadPublic AK", read_public(ak.handle))?.name;
+    let ek = step("resolve EK", resolve_ek())?;
+    let ek_public_wire = step("ReadPublic EK", resolve_ek_public_wire())?;
+    let name = step("ReadPublic AK name", read_public(ak.handle))?.name;
     let credential = b"node-tpm2-credential-self-test";
-    let made = make_credential_sw::make_credential(&ek_public_wire, credential, &name)?;
+    let made = step(
+        "MakeCredential (software)",
+        make_credential_sw::make_credential(&ek_public_wire, credential, &name),
+    )?;
 
-    let session = start_policy_session()?;
+    let session = step("StartAuthSession", start_policy_session())?;
     let result = (|| {
-        policy_secret(&session, TPM_RH_ENDORSEMENT)?;
-        policy_command_code(&session, TPM_CC_ACTIVATE_CREDENTIAL)?;
-        activate_credential(
-            ak.handle,
-            &ak_name,
-            ek.handle,
-            &ek.name,
-            &session,
-            &made.credential_blob,
-            &made.secret,
+        step("PolicySecret", policy_secret(&session, TPM_RH_ENDORSEMENT))?;
+        step(
+            "PolicyCommandCode",
+            policy_command_code(&session, TPM_CC_ACTIVATE_CREDENTIAL),
+        )?;
+        step(
+            "ActivateCredential",
+            activate_credential(
+                ak.handle,
+                &ak_name,
+                ek.handle,
+                &ek.name,
+                &session,
+                &made.credential_blob,
+                &made.secret,
+            ),
         )
     })();
 

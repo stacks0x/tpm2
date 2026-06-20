@@ -29,6 +29,9 @@ pub fn classify_tpm_rc(rc: u32) -> RcClass {
     RcClass::Other
 }
 
+/// Windows TBS `TPM_E_COMMAND_BLOCKED` (often returned for `ActivateCredential` without admin).
+pub const WINDOWS_TPM_E_COMMAND_BLOCKED: u32 = 0x8028_0400;
+
 pub fn describe_tpm_rc(rc: u32) -> String {
     let name = match rc {
         0 => "success",
@@ -38,6 +41,7 @@ pub fn describe_tpm_rc(rc: u32) -> String {
         0x0000_0143 => "TPM_RC_ATTRIBUTES",
         0x0000_017F => "TPM_RC_SIZE",
         0x0000_038E => "TPM_RC_AUTH_FAIL",
+        WINDOWS_TPM_E_COMMAND_BLOCKED => "TPM_E_COMMAND_BLOCKED (Windows TBS)",
         _ => "unknown",
     };
     let class = match classify_tpm_rc(rc) {

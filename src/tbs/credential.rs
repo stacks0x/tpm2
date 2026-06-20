@@ -9,7 +9,9 @@ use crate::tbs::commands::{
 use crate::tbs::error::{check_tpm_rc, TpmOpError, TpmResult};
 use crate::tbs::keys::{create_storage_primary, load_ak, AkBlob};
 use crate::tbs::make_credential_sw;
-use crate::tbs::parse::{parameters_after_rc, session_nonce_from_response, start_auth_session_nonce_tpm};
+use crate::tbs::parse::{
+    parameters_after_rc, ResponseParser, session_nonce_from_response, start_auth_session_nonce_tpm,
+};
 use crate::tbs::read_public::read_public;
 use crate::tbs::session_hmac::{
     handle_name_for_cphash, policy_session_auth_area, random_nonce_32,
@@ -25,6 +27,7 @@ use crate::tbs::submit_tpm_command;
 const TPM_CC_POLICY_SECRET: u32 = 0x0000_0151;
 const TPM_CC_POLICY_COMMAND_CODE: u32 = 0x0000_016C;
 const TPM_CC_ACTIVATE_CREDENTIAL: u32 = 0x0000_0147;
+const TPM_CC_MAKE_CREDENTIAL: u32 = 0x0000_0168;
 const TPM_RH_ENDORSEMENT: u32 = 0x4000_000B;
 const PERSISTENT_EK_RSA: u32 = 0x8101_0001;
 const PERSISTENT_EK_ECC: u32 = 0x8101_0002;
@@ -87,11 +90,6 @@ fn flush_stale_policy_sessions() {
     for slot in 0x10..0x40u32 {
         let _ = flush_handle(0x0300_0000 | slot);
     }
-}
-
-fn start_policy_session() -> TpmResult<PolicySession> {
-    flush_stale_policy_sessions();
-    start_policy_session_after_flush()
 }
 
 fn start_policy_session_after_flush() -> TpmResult<PolicySession> {
@@ -210,6 +208,54 @@ fn activate_policy_sessions() -> TpmResult<(PolicySession, PolicySession)> {
     Ok((ak, ek))
 }
 
+/// TPM2_MakeCredential on the device EK (Part 3 §12.6, no auth required).
+fn make_credential_tpm(
+    ek_handle: u32,
+    credential: &[u8],
+    object_name: &[u8],
+) -> TpmResult<make_credential_sw::MakeCredentialResult> {
+    let mut params = Vec::new();
+    params.extend(tpm2b(credential));
+    params.extend(tpm2b(object_name));
+    let cmd = command_with_handles_no_session(&[ek_handle], TPM_CC_MAKE_CREDENTIAL, &params);
+    let resp = submit_tpm_command(&cmd).map_err(TpmOpError::transport)?;
+    check_tpm_rc(&resp, "MakeCredential")?;
+    parse_make_credential_response(&resp)
+}
+
+fn parse_make_credential_response(
+    resp: &[u8],
+) -> TpmResult<make_credential_sw::MakeCredentialResult> {
+    parse_make_credential_response_skip(resp, make_credential_skip_param_size(resp))
+        .or_else(|_| {
+            let alt = !make_credential_skip_param_size(resp);
+            parse_make_credential_response_skip(resp, alt)
+        })
+}
+
+fn make_credential_skip_param_size(resp: &[u8]) -> bool {
+    if resp.len() < 16 {
+        return true;
+    }
+    let u16_at_14 = u16::from_be_bytes([resp[14], resp[15]]);
+    // credentialBlob HMAC+digest is typically 0x0030+ bytes
+    !(u16_at_14 >= 32 && 16 + u16_at_14 as usize <= resp.len())
+}
+
+fn parse_make_credential_response_skip(
+    resp: &[u8],
+    skip_param_size: bool,
+) -> TpmResult<make_credential_sw::MakeCredentialResult> {
+    let mut parser = ResponseParser::after_rc(resp)?;
+    if skip_param_size {
+        let _ = parser.read_u32()?;
+    }
+    Ok(make_credential_sw::MakeCredentialResult {
+        credential_blob: parser.read_tpm2b()?,
+        secret: parser.read_tpm2b()?,
+    })
+}
+
 fn activate_credential(
     activate_handle: u32,
     activate_name: &[u8],
@@ -287,12 +333,20 @@ pub fn credential_roundtrip_self_test(ak_blob: &AkBlob) -> TpmResult<Vec<u8>> {
     let ak = step("Load AK", load_ak(primary.handle, ak_blob))?;
     let ak_name = step("ReadPublic AK", read_public(ak.handle))?.name;
     let ek = step("resolve EK", resolve_ek())?;
-    let ek_public_wire = step("ReadPublic EK", resolve_ek_public_wire())?;
     let name = step("ReadPublic AK name", read_public(ak.handle))?.name;
     let credential = b"node-tpm2-credential-self-test";
     let made = step(
-        "MakeCredential (software)",
-        make_credential_sw::make_credential(&ek_public_wire, credential, &name),
+        "MakeCredential (TPM)",
+        make_credential_tpm(ek.handle, credential, &name).or_else(|tpm_err| {
+            let ek_public_wire = resolve_ek_public_wire()?;
+            make_credential_sw::make_credential(&ek_public_wire, credential, &name)
+                .map_err(|sw_err| {
+                    TpmOpError::other(format!(
+                        "MakeCredential failed (TPM: {}; software: {})",
+                        tpm_err.message, sw_err.message
+                    ))
+                })
+        }),
     )?;
 
     let (ak_session, ek_session) = step("policy sessions", activate_policy_sessions())?;

@@ -147,7 +147,9 @@ fn run_provision_ak() -> Result<(), String> {
 }
 
 fn run_activate_credential() -> Result<(), String> {
-    println!("== activate-credential (MakeCredential off-TPM + ActivateCredential) ==");
+    println!("== activate-credential (MakeCredential + ActivateCredential) ==");
+    #[cfg(windows)]
+    println!("  note: on Windows, ActivateCredential requires elevated Administrator PowerShell");
 
     let blob = provision_ak_blob().map_err(|e| e.message)?;
     let recovered = credential_roundtrip_self_test(&blob).map_err(|e| e.message)?;
@@ -265,7 +267,14 @@ fn report_tpm_rc(op: &str, rc: u32) -> Result<(), String> {
             Err(format!("{op} marshalling error 0x{rc:08X}"))
         }
         RcClass::Other => {
-            println!("  FAIL  unexpected TPM error");
+            if rc == node_tpm2::tbs::rc::WINDOWS_TPM_E_COMMAND_BLOCKED {
+                println!(
+                    "  FAIL  Windows TBS blocked this command (TPM_E_COMMAND_BLOCKED); \
+                     re-run from elevated Administrator PowerShell"
+                );
+            } else {
+                println!("  FAIL  unexpected TPM error");
+            }
             Err(format!("{op} failed 0x{rc:08X}"))
         }
     }

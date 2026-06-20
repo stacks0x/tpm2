@@ -216,13 +216,6 @@ fn hash_size(alg: u16) -> TpmResult<usize> {
     }
 }
 
-fn tpm2b(data: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(2 + data.len());
-    out.extend_from_slice(&(data.len() as u16).to_be_bytes());
-    out.extend_from_slice(data);
-    out
-}
-
 fn read_u16(data: &[u8], off: &mut usize, end: usize) -> TpmResult<u16> {
     if *off + 2 > end {
         return Err(TpmOpError::other("truncated TPM public"));

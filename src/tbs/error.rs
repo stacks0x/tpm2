@@ -74,6 +74,19 @@ pub fn check_tpm_rc(resp: &[u8], context: &str) -> TpmResult<()> {
     let rc = crate::tbs::commands::tpm_rc_from_response(resp)
         .ok_or_else(|| TpmOpError::other(format!("{context}: TPM response too short")))?;
     if rc != 0 {
+        if rc == crate::tbs::rc::WINDOWS_TPM_E_COMMAND_BLOCKED {
+            return Err(TpmOpError {
+                code: "COMMAND_BLOCKED",
+                message: format!(
+                    "{context}: Windows TBS blocked this TPM command (TPM_E_COMMAND_BLOCKED 0x{rc:08X}); \
+                     run from an elevated Administrator PowerShell"
+                ),
+                suggestion: Some(
+                    "ActivateCredential is restricted to elevated admin on Windows TBS.",
+                ),
+                tpm_rc: Some(rc),
+            });
+        }
         return Err(TpmOpError::tpm_rc(rc, context));
     }
     Ok(())

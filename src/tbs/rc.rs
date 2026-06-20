@@ -29,8 +29,16 @@ pub fn classify_tpm_rc(rc: u32) -> RcClass {
     RcClass::Other
 }
 
-/// Windows TBS `TPM_E_COMMAND_BLOCKED` (often returned for `ActivateCredential` without admin).
+/// Windows TBS `TPM_E_COMMAND_BLOCKED` — the TPM driver rejects the command ordinal
+/// (not an elevation issue; Win10 1809+ allow-list is fixed in the driver).
 pub const WINDOWS_TPM_E_COMMAND_BLOCKED: u32 = 0x8028_0400;
+
+/// `TPM2_ActivateCredential` (`0x147`) is not exposed through raw TBS on Windows.
+pub const TPM_CC_ACTIVATE_CREDENTIAL: u32 = 0x0000_0147;
+
+pub fn windows_tbs_command_blocked(rc: u32) -> bool {
+    rc == WINDOWS_TPM_E_COMMAND_BLOCKED
+}
 
 pub fn describe_tpm_rc(rc: u32) -> String {
     let name = match rc {

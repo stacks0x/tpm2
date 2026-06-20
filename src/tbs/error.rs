@@ -78,11 +78,12 @@ pub fn check_tpm_rc(resp: &[u8], context: &str) -> TpmResult<()> {
             return Err(TpmOpError {
                 code: "COMMAND_BLOCKED",
                 message: format!(
-                    "{context}: Windows TBS blocked this TPM command (TPM_E_COMMAND_BLOCKED 0x{rc:08X}); \
-                     run from an elevated Administrator PowerShell"
+                    "{context}: Windows TBS blocked TPM2 command 0x{rc:08X} (TPM_E_COMMAND_BLOCKED); \
+                     the Windows TPM driver allow-list does not permit this ordinal via raw TBS \
+                     (elevation does not help)"
                 ),
                 suggestion: Some(
-                    "ActivateCredential is restricted to elevated admin on Windows TBS.",
+                    "Use Linux /dev/tpmrm0 for raw TBS ActivateCredential, or the Windows NCrypt PCP path (not yet implemented in node-tpm2).",
                 ),
                 tpm_rc: Some(rc),
             });

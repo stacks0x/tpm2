@@ -1,7 +1,7 @@
 //! PolicySecret, TPM2_ActivateCredential, and credential roundtrips.
 //!
-//! MakeCredential is performed in software from the EK public area (same as
-//! tpm2-tools with `-T none`); ActivateCredential uses the TPM.
+//! MakeCredential uses the TPM when available; ActivateCredential works via raw TBS on Linux.
+//! Windows blocks `TPM2_ActivateCredential` (0x147) in the driver allow-list — NCrypt PCP required.
 
 use crate::tbs::commands::{
     create_primary_endorsement, flush_handle, object_handle_from_response, PrimaryKind,

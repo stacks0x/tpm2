@@ -148,16 +148,37 @@ fn run_provision_ak() -> Result<(), String> {
 
 fn run_activate_credential() -> Result<(), String> {
     println!("== activate-credential (MakeCredential + ActivateCredential) ==");
-    #[cfg(windows)]
-    println!("  note: on Windows, ActivateCredential requires elevated Administrator PowerShell");
 
     let blob = provision_ak_blob().map_err(|e| e.message)?;
-    let recovered = credential_roundtrip_self_test(&blob).map_err(|e| e.message)?;
-    if recovered != b"node-tpm2-credential-self-test" {
-        return Err("credential roundtrip secret mismatch".to_string());
+    match credential_roundtrip_self_test(&blob) {
+        Ok(recovered) => {
+            if recovered != b"node-tpm2-credential-self-test" {
+                return Err("credential roundtrip secret mismatch".to_string());
+            }
+            println!("  PASS  credential roundtrip recovered expected secret");
+            Ok(())
+        }
+        Err(e) if e.code == "COMMAND_BLOCKED" => {
+            print_windows_activate_credential_skip();
+            Ok(())
+        }
+        Err(e) => Err(e.message),
     }
-    println!("  PASS  credential roundtrip recovered expected secret");
-    Ok(())
+}
+
+#[cfg(windows)]
+fn print_windows_activate_credential_skip() {
+    use node_tpm2::tbs::rc::TPM_CC_ACTIVATE_CREDENTIAL;
+    println!(
+        "  SKIP  Windows TPM driver blocks raw TBS ActivateCredential (TPM_CC 0x{TPM_CC_ACTIVATE_CREDENTIAL:04X})"
+    );
+    println!("        PolicySecret/provision/quote work via TBS; credential activation needs NCrypt PCP.");
+    println!("        Full roundtrip verified on Linux (/dev/tpmrm0).");
+}
+
+#[cfg(not(windows))]
+fn print_windows_activate_credential_skip() {
+    println!("  SKIP  ActivateCredential blocked by platform TPM policy");
 }
 
 fn run_policy_secret() -> Result<(), String> {
@@ -269,8 +290,8 @@ fn report_tpm_rc(op: &str, rc: u32) -> Result<(), String> {
         RcClass::Other => {
             if rc == node_tpm2::tbs::rc::WINDOWS_TPM_E_COMMAND_BLOCKED {
                 println!(
-                    "  FAIL  Windows TBS blocked this command (TPM_E_COMMAND_BLOCKED); \
-                     re-run from elevated Administrator PowerShell"
+                    "  FAIL  Windows TPM driver blocked this command ordinal (TPM_E_COMMAND_BLOCKED); \
+                     raw TBS cannot invoke it on this OS build"
                 );
             } else {
                 println!("  FAIL  unexpected TPM error");

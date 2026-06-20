@@ -2,7 +2,7 @@
 
 use crate::tbs::error::{check_tpm_rc, TpmOpError, TpmResult};
 use crate::tbs::keys::{create_storage_primary, load_ak, AkBlob};
-use crate::tbs::parse::{parameters_after_rc, ResponseParser};
+use crate::tbs::parse::parameters_after_rc;
 use crate::tbs::pcr::{pcr_selection_list, PcrBank};
 use crate::tbs::wire::{command_with_password_session, tpm2b, u16};
 use crate::tbs::submit_tpm_command;

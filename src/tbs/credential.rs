@@ -12,10 +12,14 @@ use crate::tbs::make_credential_sw;
 use crate::tbs::parse::{parameters_after_rc, session_nonce_from_response, start_auth_session_nonce_tpm};
 use crate::tbs::read_public::read_public;
 use crate::tbs::session_hmac::{
-    handle_name_for_cphash, policy_session_auth_area, random_nonce_32, session_key_from_start,
-    SessionAuthInput,
+    handle_name_for_cphash, policy_session_auth_area, random_nonce_32,
+    unbound_unsalted_session_key, SessionAuthInput,
 };
-use crate::tbs::wire::{command_with_handles_and_session, start_auth_session_policy, tpm2b};
+use crate::tbs::wire::{
+    command_with_handles_and_session, command_with_handles_and_sessions,
+    command_with_handles_no_session, password_session_null_auth, start_auth_session_policy,
+    tpm2b,
+};
 use crate::tbs::submit_tpm_command;
 
 const TPM_CC_POLICY_SECRET: u32 = 0x0000_0151;
@@ -29,7 +33,6 @@ const TPMA_SESSION_CONTINUESESSION: u8 = 0x01;
 struct PolicySession {
     handle: u32,
     nonce_tpm: Vec<u8>,
-    session_key: [u8; 32],
 }
 
 impl PolicySession {
@@ -53,7 +56,7 @@ impl PolicySession {
         let nonce_caller = random_nonce_32();
         policy_session_auth_area(SessionAuthInput {
             session_handle: self.handle,
-            session_key: &self.session_key,
+            session_key: unbound_unsalted_session_key(),
             nonce_tpm: &self.nonce_tpm,
             nonce_caller: &nonce_caller,
             command_code,
@@ -83,15 +86,15 @@ impl EkHandle {
 fn flush_stale_policy_sessions() {
     for slot in 0x10..0x40u32 {
         let _ = flush_handle(0x0300_0000 | slot);
-        #[cfg(target_os = "linux")]
-        let _ = flush_handle(0x0200_0000 | (slot + 1));
-        #[cfg(windows)]
-        let _ = flush_handle(0x0200_0000 | slot);
     }
 }
 
 fn start_policy_session() -> TpmResult<PolicySession> {
     flush_stale_policy_sessions();
+    start_policy_session_after_flush()
+}
+
+fn start_policy_session_after_flush() -> TpmResult<PolicySession> {
     let nonce_caller = random_nonce_32();
     let cmd = start_auth_session_policy(&nonce_caller);
     let resp = submit_tpm_command(&cmd).map_err(TpmOpError::transport)?;
@@ -99,11 +102,9 @@ fn start_policy_session() -> TpmResult<PolicySession> {
     let handle = object_handle_from_response(&resp)
         .ok_or_else(|| TpmOpError::other("StartAuthSession: missing session handle"))?;
     let nonce_tpm = start_auth_session_nonce_tpm(&resp)?;
-    let session_key = session_key_from_start(&nonce_tpm, &nonce_caller);
     Ok(PolicySession {
         handle,
         nonce_tpm,
-        session_key,
     })
 }
 
@@ -113,17 +114,11 @@ fn policy_secret(session: &mut PolicySession, auth_handle: u32) -> TpmResult<()>
     params.extend(tpm2b_empty()); // cpHashA
     params.extend(tpm2b_empty()); // policyRef
     params.extend_from_slice(&0i32.to_be_bytes()); // expiration (0 = no timeout)
-    let auth_name = handle_name_for_cphash(auth_handle, None);
-    let session_name = handle_name_for_cphash(session.handle, None);
-    let policy_auth = session.auth_area(
-        TPM_CC_POLICY_SECRET,
-        &[auth_handle, session.handle],
-        &[auth_name.as_slice(), session_name.as_slice()],
-        &params,
-    );
+    // Part 3 §23.4: authHandle Auth Index 1 (USER); policySession Auth Index None.
+    // Endorsement hierarchy auth is satisfied via TPM_RH_PW (empty auth), not policy HMAC.
     let cmd = command_with_handles_and_session(
         &[auth_handle, session.handle],
-        &policy_auth,
+        &password_session_null_auth(),
         TPM_CC_POLICY_SECRET,
         &params,
     );
@@ -136,22 +131,15 @@ fn policy_secret(session: &mut PolicySession, auth_handle: u32) -> TpmResult<()>
 fn policy_command_code(session: &mut PolicySession, command_code: u32) -> TpmResult<()> {
     let mut params = Vec::new();
     params.extend_from_slice(&command_code.to_be_bytes());
-    let session_name = handle_name_for_cphash(session.handle, None);
-    let policy_auth = session.auth_area(
-        TPM_CC_POLICY_COMMAND_CODE,
+    // Part 3 §23.11: policySession Auth Index None → TPM_ST_NO_SESSIONS.
+    let cmd = command_with_handles_no_session(
         &[session.handle],
-        &[session_name.as_slice()],
-        &params,
-    );
-    let cmd = command_with_handles_and_session(
-        &[session.handle],
-        &policy_auth,
         TPM_CC_POLICY_COMMAND_CODE,
         &params,
     );
     let resp = submit_tpm_command(&cmd).map_err(TpmOpError::transport)?;
     check_tpm_rc(&resp, "PolicyCommandCode")?;
-    session.apply_response_nonce(&resp);
+    let _ = session; // session nonce unchanged (no session in auth area)
     Ok(())
 }
 
@@ -206,12 +194,29 @@ fn resolve_ek_public_wire() -> TpmResult<Vec<u8>> {
     Ok(wire)
 }
 
+/// Build policy sessions for ActivateCredential.
+///
+/// Platform EK authPolicy is typically `PolicySecret(endorsement)` only; the AK requires
+/// `PolicySecret + PolicyCommandCode(ActivateCredential)` (Part 3 §12.3 auth indices 1 and 2).
+fn activate_policy_sessions() -> TpmResult<(PolicySession, PolicySession)> {
+    flush_stale_policy_sessions();
+    let mut ek = start_policy_session_after_flush()?;
+    policy_secret(&mut ek, TPM_RH_ENDORSEMENT)?;
+
+    let mut ak = start_policy_session_after_flush()?;
+    policy_secret(&mut ak, TPM_RH_ENDORSEMENT)?;
+    policy_command_code(&mut ak, TPM_CC_ACTIVATE_CREDENTIAL)?;
+
+    Ok((ak, ek))
+}
+
 fn activate_credential(
     activate_handle: u32,
     activate_name: &[u8],
     key_handle: u32,
     key_name: &[u8],
-    session: &PolicySession,
+    ak_session: &PolicySession,
+    ek_session: &PolicySession,
     credential_blob: &[u8],
     secret: &[u8],
 ) -> TpmResult<Vec<u8>> {
@@ -220,15 +225,16 @@ fn activate_credential(
     params.extend(tpm2b(secret));
     let activate_name = handle_name_for_cphash(activate_handle, Some(activate_name));
     let key_name = handle_name_for_cphash(key_handle, Some(key_name));
-    let policy_auth = session.auth_area(
-        TPM_CC_ACTIVATE_CREDENTIAL,
-        &[activate_handle, key_handle],
-        &[activate_name.as_slice(), key_name.as_slice()],
-        &params,
-    );
-    let cmd = command_with_handles_and_session(
-        &[activate_handle, key_handle],
-        &policy_auth,
+    let handles = &[activate_handle, key_handle];
+    let names = &[activate_name.as_slice(), key_name.as_slice()];
+    let ak_auth = ak_session.auth_area(TPM_CC_ACTIVATE_CREDENTIAL, handles, names, &params);
+    let ek_auth = ek_session.auth_area(TPM_CC_ACTIVATE_CREDENTIAL, handles, names, &params);
+    // Auth index 1 = AK (full policy); auth index 2 = EK (PolicySecret-only policy).
+    let mut auth_area = ak_auth;
+    auth_area.extend_from_slice(&ek_auth);
+    let cmd = command_with_handles_and_sessions(
+        handles,
+        &auth_area,
         TPM_CC_ACTIVATE_CREDENTIAL,
         &params,
     );
@@ -248,17 +254,16 @@ pub fn activate_credential_with_ak_blob(
     let ak = load_ak(primary.handle, ak_blob)?;
     let ak_name = read_public(ak.handle)?.name;
     let ek = resolve_ek()?;
-    let mut session = start_policy_session()?;
+    let (ak_session, ek_session) = activate_policy_sessions()?;
 
     let result = (|| {
-        policy_secret(&mut session, TPM_RH_ENDORSEMENT)?;
-        policy_command_code(&mut session, TPM_CC_ACTIVATE_CREDENTIAL)?;
         activate_credential(
             ak.handle,
             &ak_name,
             ek.handle,
             &ek.name,
-            &session,
+            &ak_session,
+            &ek_session,
             credential_blob,
             secret,
         )
@@ -267,7 +272,8 @@ pub fn activate_credential_with_ak_blob(
     let _ = ak.flush();
     let _ = primary.flush();
     let _ = ek.flush();
-    let _ = session.flush();
+    let _ = ak_session.flush();
+    let _ = ek_session.flush();
     result
 }
 
@@ -289,14 +295,8 @@ pub fn credential_roundtrip_self_test(ak_blob: &AkBlob) -> TpmResult<Vec<u8>> {
         make_credential_sw::make_credential(&ek_public_wire, credential, &name),
     )?;
 
-    let session = step("StartAuthSession", start_policy_session())?;
-    let mut session = session;
+    let (ak_session, ek_session) = step("policy sessions", activate_policy_sessions())?;
     let result = (|| {
-        step("PolicySecret", policy_secret(&mut session, TPM_RH_ENDORSEMENT))?;
-        step(
-            "PolicyCommandCode",
-            policy_command_code(&mut session, TPM_CC_ACTIVATE_CREDENTIAL),
-        )?;
         step(
             "ActivateCredential",
             activate_credential(
@@ -304,7 +304,8 @@ pub fn credential_roundtrip_self_test(ak_blob: &AkBlob) -> TpmResult<Vec<u8>> {
                 &ak_name,
                 ek.handle,
                 &ek.name,
-                &session,
+                &ak_session,
+                &ek_session,
                 &made.credential_blob,
                 &made.secret,
             ),
@@ -314,7 +315,8 @@ pub fn credential_roundtrip_self_test(ak_blob: &AkBlob) -> TpmResult<Vec<u8>> {
     let _ = ak.flush();
     let _ = primary.flush();
     let _ = ek.flush();
-    let _ = session.flush();
+    let _ = ak_session.flush();
+    let _ = ek_session.flush();
     result
 }
 

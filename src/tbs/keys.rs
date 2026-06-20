@@ -16,7 +16,8 @@ const TPM_ALG_SHA256: u16 = 0x000B;
 const TPM_ECC_NIST_P256: u16 = 0x0003;
 
 /// Matches tpm2_create defaults for `ecc` signing keys under a storage primary.
-const AK_OBJECT_ATTRIBUTES: u32 = 0x0006_0072;
+/// Includes `adminWithPolicy` for ActivateCredential (Part 3 §12.3 ADMIN role).
+const AK_OBJECT_ATTRIBUTES: u32 = 0x0006_00F2;
 
 #[derive(Debug, Clone)]
 pub struct ProvisionAkResult {
@@ -61,11 +62,12 @@ pub fn create_storage_primary() -> TpmResult<StoragePrimary> {
 }
 
 fn public_ecc_ak() -> Vec<u8> {
+    let policy = crate::tbs::policy_digest::activate_credential_policy_digest();
     let mut t = Vec::new();
     t.extend_from_slice(&u16(TPM_ALG_ECC));
     t.extend_from_slice(&u16(TPM_ALG_SHA256));
     t.extend_from_slice(&u32(AK_OBJECT_ATTRIBUTES));
-    t.extend(tpm2b_empty());
+    t.extend(tpm2b(&policy));
     t.extend(asym_scheme_null()); // symmetric: TPM_ALG_NULL
     t.extend(asym_scheme_null()); // asymmetric scheme: TPM_ALG_NULL (ECDSA at Quote time)
     t.extend_from_slice(&u16(TPM_ECC_NIST_P256));

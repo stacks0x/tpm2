@@ -159,14 +159,10 @@ fn run_activate_credential() -> Result<(), String> {
 }
 
 fn run_policy_secret() -> Result<(), String> {
-    use node_tpm2::tbs::session_hmac::{
-        handle_name_for_cphash, policy_session_auth_area, random_nonce_32,
-        session_key_from_start, SessionAuthInput,
-    };
+    use node_tpm2::tbs::session_hmac::random_nonce_32;
 
     const TPM_CC_POLICY_SECRET: u32 = 0x0000_0151;
     const TPM_RH_ENDORSEMENT: u32 = 0x4000_000B;
-    const TPMA_SESSION_CONTINUESESSION: u8 = 0x01;
 
     println!("== policy-secret (StartAuthSession + PolicySecret endorsement) ==");
     let start_nonce = random_nonce_32();
@@ -184,30 +180,14 @@ fn run_policy_secret() -> Result<(), String> {
     println!("  session handle: 0x{handle:08X}");
     println!("  nonceTPM: {} bytes", nonce_tpm.len());
 
-    let session_key = session_key_from_start(&nonce_tpm, &start_nonce);
-
     let mut params = Vec::new();
     params.extend(node_tpm2::tbs::wire::tpm2b_empty());
     params.extend(node_tpm2::tbs::wire::tpm2b_empty());
     params.extend(node_tpm2::tbs::wire::tpm2b_empty());
     params.extend_from_slice(&0i32.to_be_bytes());
-    let auth_name = handle_name_for_cphash(TPM_RH_ENDORSEMENT, None);
-    let session_name = handle_name_for_cphash(handle, None);
-    let cmd_nonce = random_nonce_32();
-    let policy_auth = policy_session_auth_area(SessionAuthInput {
-        session_handle: handle,
-        session_key: &session_key,
-        nonce_tpm: &nonce_tpm,
-        nonce_caller: &cmd_nonce,
-        command_code: TPM_CC_POLICY_SECRET,
-        handles: &[TPM_RH_ENDORSEMENT, handle],
-        handle_names: &[auth_name.as_slice(), session_name.as_slice()],
-        params: &params,
-        session_attributes: TPMA_SESSION_CONTINUESESSION,
-    });
     let ps_cmd = node_tpm2::tbs::wire::command_with_handles_and_session(
         &[TPM_RH_ENDORSEMENT, handle],
-        &policy_auth,
+        &node_tpm2::tbs::wire::password_session_null_auth(),
         TPM_CC_POLICY_SECRET,
         &params,
     );

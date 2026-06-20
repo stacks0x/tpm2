@@ -21,9 +21,11 @@ pub struct SessionAuthInput<'a> {
     pub session_attributes: u8,
 }
 
-/// session_key = KDFa(SHA256, empty_auth, "ATH", nonceTPM, nonceCaller, 256)
-pub fn session_key_from_start(nonce_tpm: &[u8], nonce_caller: &[u8]) -> [u8; SHA256_DIGEST_SIZE] {
-    kdfa_sha256(&[], b"ATH", nonce_tpm, nonce_caller, 256)
+/// Session key for TPM2_StartAuthSession with tpmKey/bind = TPM_RH_NULL (Part 1 §19.6.8).
+///
+/// Unbound unsalted sessions have an empty sessionKey; KDFa applies only to salted/bound starts.
+pub fn unbound_unsalted_session_key() -> &'static [u8] {
+    &[]
 }
 
 /// cpHash = SHA256(cmdCode_BE || handle_name(s) || params)
@@ -65,7 +67,12 @@ pub fn policy_session_auth_area(input: SessionAuthInput<'_>) -> Vec<u8> {
         input.nonce_tpm,
         input.session_attributes,
     );
-    build_session_auth(input.session_handle, input.nonce_caller, input.session_attributes, &auth_hmac)
+    build_session_auth(
+        input.session_handle,
+        input.nonce_caller,
+        input.session_attributes,
+        &auth_hmac,
+    )
 }
 
 /// Map policy session handle to the authorization-area session handle (tpm2-tools/RM).
@@ -75,17 +82,11 @@ pub fn policy_auth_session_handle(policy_session_handle: u32) -> u32 {
 }
 
 /// Authorization-area session handle on the wire.
-/// Linux `/dev/tpmrm0` maps policy sessions to the paired `0x02…` slot; Windows TBS uses the
-/// handle returned by StartAuthSession unchanged.
+///
+/// Use the handle returned by `StartAuthSession` on all platforms. The legacy abrmd `0x02…`
+/// mapping is not used by in-kernel `/dev/tpmrm0` or Windows TBS.
 pub fn auth_session_handle_wire(policy_session_handle: u32) -> u32 {
-    #[cfg(target_os = "linux")]
-    {
-        policy_auth_session_handle(policy_session_handle)
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        policy_session_handle
-    }
+    policy_session_handle
 }
 
 /// Match a session handle from a response auth area to our policy session handle.
@@ -142,41 +143,6 @@ fn uses_object_name(handle: u32) -> bool {
     mso == TPM2_MSO_PERSISTENT || mso == TPM2_MSO_VOLATILE || mso == TPM2_MSO_NVRAM
 }
 
-fn kdfa_sha256(
-    key: &[u8],
-    label: &[u8],
-    context_u: &[u8],
-    context_v: &[u8],
-    bits: u32,
-) -> [u8; SHA256_DIGEST_SIZE] {
-    let out_len = SHA256_DIGEST_SIZE;
-    let mut out = [0u8; SHA256_DIGEST_SIZE];
-    let mut counter = 0u32;
-    let mut written = 0usize;
-    while written < out_len {
-        counter += 1;
-        let mut buf = Vec::new();
-        buf.extend_from_slice(&counter.to_be_bytes());
-        buf.extend_from_slice(label);
-        buf.push(0);
-        buf.extend_from_slice(context_u);
-        buf.extend_from_slice(context_v);
-        buf.extend_from_slice(&bits.to_be_bytes());
-        let block = hmac_sha256_block(key, &buf);
-        let take = (out_len - written).min(block.len());
-        out[written..written + take].copy_from_slice(&block[..take]);
-        written += take;
-    }
-    out
-}
-
-fn hmac_sha256_block(key: &[u8], data: &[u8]) -> [u8; SHA256_DIGEST_SIZE] {
-    let mut mac =
-        Hmac::<Sha256>::new_from_slice(key).expect("HMAC accepts any key length");
-    mac.update(data);
-    mac.finalize().into_bytes().into()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -187,13 +153,8 @@ mod tests {
     }
 
     #[test]
-    fn session_key_empty_auth_deterministic() {
-        let tpm = [0xAAu8; 32];
-        let caller = [0xBBu8; 32];
-        let k1 = session_key_from_start(&tpm, &caller);
-        let k2 = session_key_from_start(&tpm, &caller);
-        assert_eq!(k1, k2);
-        assert_ne!(k1, [0u8; 32]);
+    fn unbound_unsalted_session_key_is_empty() {
+        assert!(unbound_unsalted_session_key().is_empty());
     }
 
     #[test]

@@ -62,20 +62,40 @@ pub fn command_with_handles_and_session(
     code: u32,
     params: &[u8],
 ) -> Vec<u8> {
+    command_with_handles_and_sessions(handles, session, code, params)
+}
+
+/// Command with multiple handles + concatenated auth sessions + parameters.
+pub fn command_with_handles_and_sessions(
+    handles: &[u32],
+    sessions: &[u8],
+    code: u32,
+    params: &[u8],
+) -> Vec<u8> {
     let mut body = Vec::new();
     for h in handles {
         body.extend_from_slice(&h.to_be_bytes());
     }
-    body.extend_from_slice(&(session.len() as u32).to_be_bytes());
-    body.extend(session);
+    body.extend_from_slice(&(sessions.len() as u32).to_be_bytes());
+    body.extend_from_slice(sessions);
     body.extend_from_slice(params);
     command(TPM_ST_SESSIONS, code, &body)
 }
 
-/// Password session + policy/HMAC session auth area (PolicySecret on hierarchies).
-pub fn password_and_policy_sessions(policy_session: &[u8]) -> Vec<u8> {
-    let mut sessions = password_session_null_auth();
-    sessions.extend_from_slice(policy_session);
+/// Command with handles and parameters only (Part 3: `TPM_ST_NO_SESSIONS`).
+pub fn command_with_handles_no_session(handles: &[u32], code: u32, params: &[u8]) -> Vec<u8> {
+    let mut body = Vec::new();
+    for h in handles {
+        body.extend_from_slice(&h.to_be_bytes());
+    }
+    body.extend_from_slice(params);
+    command(TPM_ST_NO_SESSIONS, code, &body)
+}
+
+/// Auth area for ActivateCredential: policy session (auth index 1) + password (auth index 2).
+pub fn policy_and_password_sessions(policy_session: &[u8]) -> Vec<u8> {
+    let mut sessions = policy_session.to_vec();
+    sessions.extend_from_slice(&password_session_null_auth());
     sessions
 }
 

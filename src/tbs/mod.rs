@@ -8,6 +8,7 @@ pub mod keys;
 pub mod make_credential_sw;
 pub mod nv;
 pub mod parse;
+pub mod policy_digest;
 pub mod pcr;
 pub mod properties;
 pub mod quote;

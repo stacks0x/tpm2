@@ -139,7 +139,7 @@ fn encrypt_seed_identity(ek: &EkRsaPublic, seed: &[u8]) -> TpmResult<Vec<u8>> {
     let encrypted = pubkey
         .encrypt(&mut rng, padding, seed)
         .map_err(|e| TpmOpError::other(format!("RSA-OAEP encrypt failed: {e}")))?;
-    Ok(tpm2b(&encrypted))
+    Ok(encrypted)
 }
 
 fn kdfa(

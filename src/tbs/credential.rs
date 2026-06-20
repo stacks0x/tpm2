@@ -9,7 +9,7 @@ use crate::tbs::commands::{
 use crate::tbs::error::{check_tpm_rc, TpmOpError, TpmResult};
 use crate::tbs::keys::{create_storage_primary, load_ak, AkBlob};
 use crate::tbs::make_credential_sw;
-use crate::tbs::parse::{parameters_after_rc, start_auth_session_nonce_tpm};
+use crate::tbs::parse::{parameters_after_rc, session_nonce_from_response, start_auth_session_nonce_tpm};
 use crate::tbs::read_public::read_public;
 use crate::tbs::session_hmac::{
     handle_name_for_cphash, policy_session_auth_area, random_nonce_32, session_key_from_start,
@@ -35,6 +35,12 @@ struct PolicySession {
 impl PolicySession {
     fn flush(self) -> TpmResult<()> {
         flush_handle(self.handle)
+    }
+
+    fn apply_response_nonce(&mut self, resp: &[u8]) {
+        if let Ok(nonce) = session_nonce_from_response(resp, self.handle) {
+            self.nonce_tpm = nonce;
+        }
     }
 
     fn auth_area(
@@ -101,7 +107,7 @@ fn start_policy_session() -> TpmResult<PolicySession> {
     })
 }
 
-fn policy_secret(session: &PolicySession, auth_handle: u32) -> TpmResult<()> {
+fn policy_secret(session: &mut PolicySession, auth_handle: u32) -> TpmResult<()> {
     let mut params = Vec::new();
     params.extend(tpm2b_empty()); // nonceTPM (empty: no policy timeout binding)
     params.extend(tpm2b_empty()); // cpHashA
@@ -123,10 +129,11 @@ fn policy_secret(session: &PolicySession, auth_handle: u32) -> TpmResult<()> {
     );
     let resp = submit_tpm_command(&cmd).map_err(TpmOpError::transport)?;
     check_tpm_rc(&resp, "PolicySecret")?;
+    session.apply_response_nonce(&resp);
     Ok(())
 }
 
-fn policy_command_code(session: &PolicySession, command_code: u32) -> TpmResult<()> {
+fn policy_command_code(session: &mut PolicySession, command_code: u32) -> TpmResult<()> {
     let mut params = Vec::new();
     params.extend_from_slice(&command_code.to_be_bytes());
     let session_name = handle_name_for_cphash(session.handle, None);
@@ -144,6 +151,7 @@ fn policy_command_code(session: &PolicySession, command_code: u32) -> TpmResult<
     );
     let resp = submit_tpm_command(&cmd).map_err(TpmOpError::transport)?;
     check_tpm_rc(&resp, "PolicyCommandCode")?;
+    session.apply_response_nonce(&resp);
     Ok(())
 }
 
@@ -240,11 +248,11 @@ pub fn activate_credential_with_ak_blob(
     let ak = load_ak(primary.handle, ak_blob)?;
     let ak_name = read_public(ak.handle)?.name;
     let ek = resolve_ek()?;
-    let session = start_policy_session()?;
+    let mut session = start_policy_session()?;
 
     let result = (|| {
-        policy_secret(&session, TPM_RH_ENDORSEMENT)?;
-        policy_command_code(&session, TPM_CC_ACTIVATE_CREDENTIAL)?;
+        policy_secret(&mut session, TPM_RH_ENDORSEMENT)?;
+        policy_command_code(&mut session, TPM_CC_ACTIVATE_CREDENTIAL)?;
         activate_credential(
             ak.handle,
             &ak_name,
@@ -282,11 +290,12 @@ pub fn credential_roundtrip_self_test(ak_blob: &AkBlob) -> TpmResult<Vec<u8>> {
     )?;
 
     let session = step("StartAuthSession", start_policy_session())?;
+    let mut session = session;
     let result = (|| {
-        step("PolicySecret", policy_secret(&session, TPM_RH_ENDORSEMENT))?;
+        step("PolicySecret", policy_secret(&mut session, TPM_RH_ENDORSEMENT))?;
         step(
             "PolicyCommandCode",
-            policy_command_code(&session, TPM_CC_ACTIVATE_CREDENTIAL),
+            policy_command_code(&mut session, TPM_CC_ACTIVATE_CREDENTIAL),
         )?;
         step(
             "ActivateCredential",

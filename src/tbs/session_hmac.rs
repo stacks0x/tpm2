@@ -88,6 +88,13 @@ pub fn auth_session_handle_wire(policy_session_handle: u32) -> u32 {
     }
 }
 
+/// Match a session handle from a response auth area to our policy session handle.
+pub fn session_handles_match(auth_area_handle: u32, session_handle: u32) -> bool {
+    auth_area_handle == session_handle
+        || auth_area_handle == auth_session_handle_wire(session_handle)
+        || auth_area_handle == policy_auth_session_handle(session_handle)
+}
+
 pub fn build_session_auth(
     policy_session_handle: u32,
     nonce_caller: &[u8],

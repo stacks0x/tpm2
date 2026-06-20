@@ -1,7 +1,7 @@
 //! TPM2_ReadPublic and SPKI DER extraction.
 
 use crate::tbs::error::{check_tpm_rc, TpmOpError, TpmResult};
-use crate::tbs::parse::parameters_after_rc;
+use crate::tbs::parse::ResponseParser;
 use crate::tbs::wire::{command, u32};
 use crate::tbs::submit_tpm_command;
 
@@ -28,10 +28,7 @@ pub fn read_public(handle: u32) -> TpmResult<ReadPublicResult> {
     let resp = submit_tpm_command(&cmd).map_err(TpmOpError::transport)?;
     check_tpm_rc(&resp, "ReadPublic")?;
 
-    let mut parser = parameters_after_rc(&resp)?;
-    let out_public = parser.read_tpm2b()?;
-    let name = parser.read_tpm2b()?;
-    let _qualified_name = parser.read_tpm2b()?;
+    let (out_public, name, _qualified_name) = parse_read_public_fields(&resp)?;
 
     let mut public_wire = Vec::with_capacity(2 + out_public.len());
     public_wire.extend_from_slice(&(out_public.len() as u16).to_be_bytes());
@@ -43,6 +40,42 @@ pub fn read_public(handle: u32) -> TpmResult<ReadPublicResult> {
         public_wire,
         name,
     })
+}
+
+/// ReadPublic returns three TPM2B fields. Windows TBS omits the parameter-area size
+/// prefix; Linux/tpmrm0 includes it before the TPM2B values.
+fn parse_read_public_fields(resp: &[u8]) -> TpmResult<(Vec<u8>, Vec<u8>, Vec<u8>)> {
+    parse_read_public_fields_skip(resp, read_public_skip_param_size(resp))
+        .or_else(|_| {
+            let alt = !read_public_skip_param_size(resp);
+            parse_read_public_fields_skip(resp, alt)
+        })
+}
+
+fn read_public_skip_param_size(resp: &[u8]) -> bool {
+    if resp.len() < 12 {
+        return true;
+    }
+    let first_u16 = u16::from_be_bytes([resp[10], resp[11]]);
+    // TPM2B_PUBLIC payload is typically 48+ bytes; paramAreaSize u32 starts with 0x0000.
+    !(first_u16 >= 48 && (12 + first_u16 as usize) <= resp.len())
+}
+
+fn parse_read_public_fields_skip(
+    resp: &[u8],
+    skip_param_size: bool,
+) -> TpmResult<(Vec<u8>, Vec<u8>, Vec<u8>)> {
+    let mut parser = ResponseParser::after_rc(resp)?;
+    if skip_param_size {
+        let _ = parser.read_u32()?;
+    }
+    let out_public = parser.read_tpm2b()?;
+    let name = parser.read_tpm2b()?;
+    let qualified_name = parser.read_tpm2b()?;
+    if out_public.is_empty() || name.is_empty() {
+        return Err(TpmOpError::other("ReadPublic: empty outPublic or name"));
+    }
+    Ok((out_public, name, qualified_name))
 }
 
 /// Decode inner TPMT_PUBLIC from a TPM2B wire blob (size prefix + payload).
@@ -257,6 +290,53 @@ mod tests {
     fn parse_handle_hex() {
         assert_eq!(parse_handle("0x81000001").unwrap(), 0x8100_0001);
         assert_eq!(parse_handle("81000001").unwrap(), 0x8100_0001);
+    }
+
+    #[test]
+    fn parse_read_public_direct_tpm2b_at_offset_10() {
+        let out = vec![0xABu8; 60];
+        let name = vec![0x01, 0x02, 0x03];
+        let qual = vec![0x04, 0x05, 0x06];
+        let param_len = 2 + out.len() + 2 + name.len() + 2 + qual.len();
+        let total = 10 + param_len;
+        let mut resp = Vec::new();
+        resp.extend_from_slice(&[0x80, 0x01]);
+        resp.extend_from_slice(&(total as u32).to_be_bytes());
+        resp.extend_from_slice(&0u32.to_be_bytes());
+        resp.extend_from_slice(&(out.len() as u16).to_be_bytes());
+        resp.extend_from_slice(&out);
+        resp.extend_from_slice(&(name.len() as u16).to_be_bytes());
+        resp.extend_from_slice(&name);
+        resp.extend_from_slice(&(qual.len() as u16).to_be_bytes());
+        resp.extend_from_slice(&qual);
+        let (o, n, q) = parse_read_public_fields(&resp).expect("parse");
+        assert_eq!(o, out);
+        assert_eq!(n, name);
+        assert_eq!(q, qual);
+    }
+
+    #[test]
+    fn parse_read_public_with_param_size_prefix() {
+        let out = vec![0xCDu8; 60];
+        let name = vec![0x0A, 0x0B];
+        let qual = vec![0x0C, 0x0D];
+        let param_len = 2 + out.len() + 2 + name.len() + 2 + qual.len();
+        let total = 10 + 4 + param_len;
+        let mut resp = Vec::new();
+        resp.extend_from_slice(&[0x80, 0x01]);
+        resp.extend_from_slice(&(total as u32).to_be_bytes());
+        resp.extend_from_slice(&0u32.to_be_bytes());
+        resp.extend_from_slice(&(param_len as u32).to_be_bytes());
+        resp.extend_from_slice(&(out.len() as u16).to_be_bytes());
+        resp.extend_from_slice(&out);
+        resp.extend_from_slice(&(name.len() as u16).to_be_bytes());
+        resp.extend_from_slice(&name);
+        resp.extend_from_slice(&(qual.len() as u16).to_be_bytes());
+        resp.extend_from_slice(&qual);
+        let (o, n, q) = parse_read_public_fields(&resp).expect("parse");
+        assert_eq!(o, out);
+        assert_eq!(n, name);
+        assert_eq!(q, qual);
     }
 
     #[test]

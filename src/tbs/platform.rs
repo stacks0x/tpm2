@@ -37,23 +37,33 @@ impl TbsContext {
     }
 
     pub fn submit(&self, cmd: &[u8]) -> Result<Vec<u8>, String> {
-        unsafe {
-            let mut resp = vec![0u8; 4096];
-            let mut resp_len: u32 = resp.len() as u32;
-            let rc = Tbsip_Submit_Command(
-                self.handle,
-                TBS_COMMAND_LOCALITY_ZERO,
-                TBS_COMMAND_PRIORITY_NORMAL,
-                cmd,
-                resp.as_mut_ptr(),
-                &mut resp_len,
-            );
-            if rc != 0 {
-                return Err(format!("Tbsip_Submit_Command -> 0x{rc:08X}"));
-            }
-            resp.truncate(resp_len as usize);
-            Ok(resp)
+        submit_to_context(self.handle, cmd)
+    }
+}
+
+/// Submit a TPM command through an existing TBS context (caller-owned; not closed here).
+///
+/// PCP `PCP_PLATFORMHANDLE` returns a context where persisted key handles are visible.
+pub fn submit_to_context(context: *mut c_void, cmd: &[u8]) -> Result<Vec<u8>, String> {
+    if context.is_null() {
+        return Err("TBS context is null".to_string());
+    }
+    unsafe {
+        let mut resp = vec![0u8; 4096];
+        let mut resp_len: u32 = resp.len() as u32;
+        let rc = Tbsip_Submit_Command(
+            context,
+            TBS_COMMAND_LOCALITY_ZERO,
+            TBS_COMMAND_PRIORITY_NORMAL,
+            cmd,
+            resp.as_mut_ptr(),
+            &mut resp_len,
+        );
+        if rc != 0 {
+            return Err(format!("Tbsip_Submit_Command -> 0x{rc:08X}"));
         }
+        resp.truncate(resp_len as usize);
+        Ok(resp)
     }
 }
 

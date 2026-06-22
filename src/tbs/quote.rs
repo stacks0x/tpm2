@@ -29,13 +29,26 @@ pub fn quote(
     qualifying_data: &[u8],
     bank: PcrBank,
 ) -> TpmResult<QuoteResult> {
+    quote_with_submit(sign_handle, pcr_selection, qualifying_data, bank, |cmd| {
+        submit_tpm_command(cmd)
+    })
+}
+
+/// Quote using a caller-provided TBS submit function (e.g. PCP-linked context on Windows).
+pub fn quote_with_submit(
+    sign_handle: u32,
+    pcr_selection: &[u32],
+    qualifying_data: &[u8],
+    bank: PcrBank,
+    submit: impl FnOnce(&[u8]) -> Result<Vec<u8>, String>,
+) -> TpmResult<QuoteResult> {
     let mut params = Vec::new();
     params.extend(tpm2b(qualifying_data));
     params.extend(ecdsa_sha256_scheme());
     params.extend(pcr_selection_list(bank, pcr_selection));
 
     let cmd = command_with_password_session(sign_handle, TPM_CC_QUOTE, &params);
-    let resp = submit_tpm_command(&cmd).map_err(TpmOpError::transport)?;
+    let resp = submit(&cmd).map_err(TpmOpError::transport)?;
     check_tpm_rc(&resp, "Quote")?;
 
     let mut parser = parameters_after_rc(&resp)?;

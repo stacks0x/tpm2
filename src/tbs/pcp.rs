@@ -15,7 +15,7 @@ use crate::tbs::ak_blob::{decode_pcp_blob, encode_pcp_blob, public_wire_from_pcp
 use crate::tbs::error::{TpmOpError, TpmResult};
 use crate::tbs::keys::{AkBlob, ProvisionAkResult};
 use crate::tbs::pcr::PcrBank;
-use crate::tbs::quote::{quote, QuoteResult};
+use crate::tbs::quote::{quote_with_submit, QuoteResult};
 use crate::tbs::read_public::public_wire_to_spki_der;
 use crate::tbs::session_hmac::random_nonce_32;
 
@@ -78,6 +78,12 @@ impl PcpProvider {
         }
         Ok(PcpKey { handle: key })
     }
+
+    /// TBS context owned by PCP; valid for the lifetime of this provider handle.
+    fn tbs_context(&self) -> TpmResult<*mut std::ffi::c_void> {
+        let buf = get_buffer_property_prov(self.handle, w!("PCP_PLATFORMHANDLE"))?;
+        parse_tbs_context(&buf)
+    }
 }
 
 impl Drop for PcpProvider {
@@ -94,24 +100,13 @@ struct PcpKey {
 
 impl PcpKey {
     fn id_binding(&self) -> TpmResult<PcpAkMetadata> {
-        let blob = get_buffer_property(self.handle, w!("PCP_TPM12_IDBINDING"))?;
-        decode_id_binding(&blob)
+        let buf = get_buffer_property_key(self.handle, w!("PCP_TPM12_IDBINDING"))?;
+        decode_id_binding(&buf)
     }
 
     fn tpm_handle(&self) -> TpmResult<u32> {
-        let mut buf = [0u8; 4];
-        let mut size = 0u32;
-        unsafe {
-            NCryptGetProperty(
-                self.handle,
-                w!("PCP_PLATFORMHANDLE"),
-                Some(&mut buf),
-                &mut size,
-                NCRYPT_NO_SECURITY_FLAGS,
-            )
-            .map_err(ncrypt_err("NCryptGetProperty(PCP_PLATFORMHANDLE)"))?;
-        }
-        Ok(u32::from_le_bytes(buf))
+        let buf = get_buffer_property_key(self.handle, w!("PCP_PLATFORMHANDLE"))?;
+        parse_tpm_object_handle(&buf)
     }
 
     fn activate_credential(&self, credential_blob: &[u8], secret: &[u8]) -> TpmResult<Vec<u8>> {
@@ -128,7 +123,7 @@ impl PcpKey {
             )
             .map_err(ncrypt_err("NCryptSetProperty(PCP_TPM12_IDACTIVATION)"))?;
         }
-        get_buffer_property(self.handle, w!("PCP_TPM12_IDACTIVATION"))
+        get_buffer_property_key(self.handle, w!("PCP_TPM12_IDACTIVATION"))
     }
 }
 
@@ -171,7 +166,7 @@ fn set_u32_property(
     Ok(())
 }
 
-fn get_buffer_property(key: NCRYPT_KEY_HANDLE, name: PCWSTR) -> TpmResult<Vec<u8>> {
+fn get_buffer_property_key(key: NCRYPT_KEY_HANDLE, name: PCWSTR) -> TpmResult<Vec<u8>> {
     let mut size = 0u32;
     unsafe {
         let _ = NCryptGetProperty(key, name, None, &mut size, NCRYPT_NO_SECURITY_FLAGS);
@@ -180,6 +175,21 @@ fn get_buffer_property(key: NCRYPT_KEY_HANDLE, name: PCWSTR) -> TpmResult<Vec<u8
         }
         let mut buf = vec![0u8; size as usize];
         NCryptGetProperty(key, name, Some(&mut buf), &mut size, NCRYPT_NO_SECURITY_FLAGS)
+            .map_err(ncrypt_err("NCryptGetProperty"))?;
+        buf.truncate(size as usize);
+        Ok(buf)
+    }
+}
+
+fn get_buffer_property_prov(prov: NCRYPT_PROV_HANDLE, name: PCWSTR) -> TpmResult<Vec<u8>> {
+    let mut size = 0u32;
+    unsafe {
+        let _ = NCryptGetProperty(prov, name, None, &mut size, NCRYPT_NO_SECURITY_FLAGS);
+        if size == 0 {
+            return Err(TpmOpError::other("NCryptGetProperty returned zero size"));
+        }
+        let mut buf = vec![0u8; size as usize];
+        NCryptGetProperty(prov, name, Some(&mut buf), &mut size, NCRYPT_NO_SECURITY_FLAGS)
             .map_err(ncrypt_err("NCryptGetProperty"))?;
         buf.truncate(size as usize);
         Ok(buf)
@@ -222,6 +232,33 @@ fn read_be_tpm2b(cursor: &mut &[u8]) -> TpmResult<Vec<u8>> {
     Ok(out)
 }
 
+fn parse_tbs_context(buf: &[u8]) -> TpmResult<*mut std::ffi::c_void> {
+    match buf.len() {
+        8 => {
+            let ptr = u64::from_le_bytes(buf[..8].try_into().expect("8 bytes"));
+            Ok(ptr as *mut std::ffi::c_void)
+        }
+        4 => {
+            let ptr = u32::from_le_bytes(buf[..4].try_into().expect("4 bytes"));
+            Ok(ptr as *mut std::ffi::c_void)
+        }
+        _ => Err(TpmOpError::other(format!(
+            "PCP TBS context has unexpected size {} (expected 4 or 8)",
+            buf.len()
+        ))),
+    }
+}
+
+fn parse_tpm_object_handle(buf: &[u8]) -> TpmResult<u32> {
+    if buf.len() < 4 {
+        return Err(TpmOpError::other(format!(
+            "PCP TPM object handle too short ({} bytes)",
+            buf.len()
+        )));
+    }
+    Ok(u32::from_le_bytes(buf[..4].try_into().expect("4 bytes")))
+}
+
 pub fn provision_ak_blob() -> TpmResult<AkBlob> {
     let pcp = PcpProvider::open()?;
     let key_name = random_key_name();
@@ -250,9 +287,12 @@ pub fn quote_with_pcp_ak_blob(
 ) -> TpmResult<QuoteResult> {
     let meta = decode_pcp_blob(ak_blob)?;
     let pcp = PcpProvider::open()?;
+    let tbs = pcp.tbs_context()?;
     let key = pcp.open_key(&meta.key_name)?;
     let tpm_handle = key.tpm_handle()?;
-    quote(tpm_handle, pcr_selection, qualifying_data, bank)
+    quote_with_submit(tpm_handle, pcr_selection, qualifying_data, bank, |cmd| {
+        crate::tbs::platform::submit_to_context(tbs, cmd)
+    })
 }
 
 pub fn activate_credential_with_pcp_blob(

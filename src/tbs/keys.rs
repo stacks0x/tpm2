@@ -129,6 +129,7 @@ pub fn flush_transient(handle: u32) -> TpmResult<()> {
 }
 
 /// Provision a wrapped AK blob under a freshly created storage primary; flushes the primary.
+#[cfg(not(windows))]
 pub fn provision_ak_blob() -> TpmResult<AkBlob> {
     let primary = create_storage_primary()?;
     let blob = create_ak(primary.handle)?;
@@ -136,7 +137,13 @@ pub fn provision_ak_blob() -> TpmResult<AkBlob> {
     Ok(blob)
 }
 
+#[cfg(windows)]
+pub fn provision_ak_blob() -> TpmResult<AkBlob> {
+    crate::tbs::pcp::provision_ak_blob()
+}
+
 /// Provision AK and return SPKI DER + wrapped blob (spec §4.3 `provisionAk`).
+#[cfg(not(windows))]
 pub fn provision_ak() -> TpmResult<ProvisionAkResult> {
     let ak_blob = provision_ak_blob()?;
     let ak_public_der = crate::tbs::read_public::public_wire_to_spki_der(&ak_blob.public)?;
@@ -144,6 +151,11 @@ pub fn provision_ak() -> TpmResult<ProvisionAkResult> {
         ak_public_der,
         ak_blob,
     })
+}
+
+#[cfg(windows)]
+pub fn provision_ak() -> TpmResult<ProvisionAkResult> {
+    crate::tbs::pcp::provision_ak()
 }
 
 #[cfg(test)]

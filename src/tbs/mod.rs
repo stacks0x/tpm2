@@ -1,6 +1,7 @@
 #[cfg(test)]
 pub mod hw_test;
 
+pub mod ak_blob;
 pub mod commands;
 pub mod credential;
 pub mod error;
@@ -16,6 +17,9 @@ pub mod rc;
 pub mod read_public;
 pub mod session_hmac;
 pub mod wire;
+
+#[cfg(windows)]
+mod pcp;
 
 #[cfg(windows)]
 mod platform;

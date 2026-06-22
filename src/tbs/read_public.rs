@@ -1,5 +1,7 @@
 //! TPM2_ReadPublic and SPKI DER extraction.
 
+use sha2::{Digest, Sha256};
+
 use crate::tbs::error::{check_tpm_rc, TpmOpError, TpmResult};
 use crate::tbs::parse::ResponseParser;
 use crate::tbs::wire::{command, u32};
@@ -76,6 +78,44 @@ fn parse_read_public_fields_skip(
         return Err(TpmOpError::other("ReadPublic: empty outPublic or name"));
     }
     Ok((out_public, name, qualified_name))
+}
+
+const TPM_ALG_SHA256: u16 = 0x000B;
+
+/// Compute TPM object Name bytes (inner payload, no TPM2B prefix) from a TPM2B_PUBLIC blob.
+pub fn object_name_from_public_wire(wire: &[u8]) -> TpmResult<Vec<u8>> {
+    if wire.len() < 2 {
+        return Err(TpmOpError::other("AK public wire blob too short"));
+    }
+    let size = u16::from_be_bytes([wire[0], wire[1]]) as usize;
+    if wire.len() < 2 + size {
+        return Err(TpmOpError::other("truncated AK public wire blob"));
+    }
+    let public = &wire[2..2 + size];
+    object_name_from_public_area(public)
+}
+
+fn object_name_from_public_area(public: &[u8]) -> TpmResult<Vec<u8>> {
+    if public.len() < 4 {
+        return Err(TpmOpError::other("TPMT_PUBLIC too short for Name"));
+    }
+    let name_alg = u16::from_be_bytes([public[2], public[3]]);
+    let digest = match name_alg {
+        TPM_ALG_SHA256 => {
+            let mut hasher = Sha256::new();
+            hasher.update(public);
+            hasher.finalize().to_vec()
+        }
+        other => {
+            return Err(TpmOpError::other(format!(
+                "unsupported nameAlg 0x{other:04X} for object Name"
+            )));
+        }
+    };
+    let mut name = Vec::with_capacity(2 + digest.len());
+    name.extend_from_slice(&name_alg.to_be_bytes());
+    name.extend_from_slice(&digest);
+    Ok(name)
 }
 
 /// Decode inner TPMT_PUBLIC from a TPM2B wire blob (size prefix + payload).

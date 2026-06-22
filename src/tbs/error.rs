@@ -83,7 +83,7 @@ pub fn check_tpm_rc(resp: &[u8], context: &str) -> TpmResult<()> {
                      (elevation does not help)"
                 ),
                 suggestion: Some(
-                    "Use Linux /dev/tpmrm0 for raw TBS ActivateCredential, or the Windows NCrypt PCP path (not yet implemented in node-tpm2).",
+                    "Windows credential activation uses NCrypt PCP (PCP_TPM12_IDACTIVATION).",
                 ),
                 tpm_rc: Some(rc),
             });

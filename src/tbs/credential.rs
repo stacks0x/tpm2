@@ -1,7 +1,7 @@
 //! PolicySecret, TPM2_ActivateCredential, and credential roundtrips.
 //!
-//! MakeCredential uses the TPM when available; ActivateCredential works via raw TBS on Linux.
-//! Windows blocks `TPM2_ActivateCredential` (0x147) in the driver allow-list — NCrypt PCP required.
+//! Linux: MakeCredential + ActivateCredential via raw TBS.
+//! Windows: MakeCredential via TBS (or software fallback); ActivateCredential via NCrypt PCP.
 
 use crate::tbs::commands::{
     create_primary_endorsement, flush_handle, object_handle_from_response, PrimaryKind,
@@ -296,6 +296,11 @@ pub fn activate_credential_with_ak_blob(
     credential_blob: &[u8],
     secret: &[u8],
 ) -> TpmResult<Vec<u8>> {
+    #[cfg(windows)]
+    if crate::tbs::ak_blob::is_pcp_blob(ak_blob) {
+        return crate::tbs::pcp::activate_credential_with_pcp_blob(ak_blob, credential_blob, secret);
+    }
+
     let primary = create_storage_primary()?;
     let ak = load_ak(primary.handle, ak_blob)?;
     let ak_name = read_public(ak.handle)?.name;
@@ -329,11 +334,19 @@ fn step<T>(label: &str, result: TpmResult<T>) -> TpmResult<T> {
 
 /// Self-contained roundtrip for probes: MakeCredential then ActivateCredential.
 pub fn credential_roundtrip_self_test(ak_blob: &AkBlob) -> TpmResult<Vec<u8>> {
-    let primary = step("CreatePrimary storage", create_storage_primary())?;
-    let ak = step("Load AK", load_ak(primary.handle, ak_blob))?;
-    let ak_name = step("ReadPublic AK", read_public(ak.handle))?.name;
     let ek = step("resolve EK", resolve_ek())?;
-    let name = step("ReadPublic AK name", read_public(ak.handle))?.name;
+    let name = if crate::tbs::ak_blob::is_pcp_blob(ak_blob) {
+        let meta = crate::tbs::ak_blob::decode_pcp_blob(ak_blob)?;
+        let wire = crate::tbs::ak_blob::public_wire_from_pcp_meta(&meta);
+        crate::tbs::read_public::object_name_from_public_wire(&wire)?
+    } else {
+        let primary = step("CreatePrimary storage", create_storage_primary())?;
+        let ak = step("Load AK", load_ak(primary.handle, ak_blob))?;
+        let name = step("ReadPublic AK name", read_public(ak.handle))?.name;
+        let _ = ak.flush();
+        let _ = primary.flush();
+        name
+    };
     let credential = b"node-tpm2-credential-self-test";
     let made = step(
         "MakeCredential (TPM)",
@@ -349,9 +362,17 @@ pub fn credential_roundtrip_self_test(ak_blob: &AkBlob) -> TpmResult<Vec<u8>> {
         }),
     )?;
 
-    let (ak_session, ek_session) = step("policy sessions", activate_policy_sessions())?;
-    let result = (|| {
+    let result = if crate::tbs::ak_blob::is_pcp_blob(ak_blob) {
         step(
+            "ActivateCredential (PCP)",
+            activate_credential_with_ak_blob(ak_blob, &made.credential_blob, &made.secret),
+        )
+    } else {
+        let primary = step("CreatePrimary storage", create_storage_primary())?;
+        let ak = step("Load AK", load_ak(primary.handle, ak_blob))?;
+        let ak_name = step("ReadPublic AK", read_public(ak.handle))?.name;
+        let (ak_session, ek_session) = step("policy sessions", activate_policy_sessions())?;
+        let result = step(
             "ActivateCredential",
             activate_credential(
                 ak.handle,
@@ -363,14 +384,15 @@ pub fn credential_roundtrip_self_test(ak_blob: &AkBlob) -> TpmResult<Vec<u8>> {
                 &made.credential_blob,
                 &made.secret,
             ),
-        )
-    })();
+        );
+        let _ = ak.flush();
+        let _ = primary.flush();
+        let _ = ak_session.flush();
+        let _ = ek_session.flush();
+        result
+    };
 
-    let _ = ak.flush();
-    let _ = primary.flush();
     let _ = ek.flush();
-    let _ = ak_session.flush();
-    let _ = ek_session.flush();
     result
 }
 

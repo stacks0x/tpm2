@@ -42,6 +42,7 @@ fn run_all() -> Result<(), String> {
     run_quote()?;
     run_provision_ak()?;
     run_activate_credential()?;
+    run_policy_secret()?;
     println!("\ntbs-probe: all checks passed");
     Ok(())
 }
@@ -158,27 +159,8 @@ fn run_activate_credential() -> Result<(), String> {
             println!("  PASS  credential roundtrip recovered expected secret");
             Ok(())
         }
-        Err(e) if e.code == "COMMAND_BLOCKED" => {
-            print_windows_activate_credential_skip();
-            Ok(())
-        }
         Err(e) => Err(e.message),
     }
-}
-
-#[cfg(windows)]
-fn print_windows_activate_credential_skip() {
-    use node_tpm2::tbs::rc::TPM_CC_ACTIVATE_CREDENTIAL;
-    println!(
-        "  SKIP  Windows TPM driver blocks raw TBS ActivateCredential (TPM_CC 0x{TPM_CC_ACTIVATE_CREDENTIAL:04X})"
-    );
-    println!("        PolicySecret/provision/quote work via TBS; credential activation needs NCrypt PCP.");
-    println!("        Full roundtrip verified on Linux (/dev/tpmrm0).");
-}
-
-#[cfg(not(windows))]
-fn print_windows_activate_credential_skip() {
-    println!("  SKIP  ActivateCredential blocked by platform TPM policy");
 }
 
 fn run_policy_secret() -> Result<(), String> {

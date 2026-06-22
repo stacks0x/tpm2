@@ -54,6 +54,11 @@ pub fn quote_with_ak_blob(
     qualifying_data: &[u8],
     bank: PcrBank,
 ) -> TpmResult<QuoteResult> {
+    #[cfg(windows)]
+    if crate::tbs::ak_blob::is_pcp_blob(ak_blob) {
+        return crate::tbs::pcp::quote_with_pcp_ak_blob(ak_blob, pcr_selection, qualifying_data, bank);
+    }
+
     let primary = create_storage_primary()?;
     let loaded = load_ak(primary.handle, ak_blob)?;
     let result = match quote(loaded.handle, pcr_selection, qualifying_data, bank) {

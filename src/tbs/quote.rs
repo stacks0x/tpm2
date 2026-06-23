@@ -9,6 +9,8 @@ use crate::tbs::submit_tpm_command;
 
 const TPM_CC_QUOTE: u32 = 0x0000_0158;
 const TPM_ALG_ECDSA: u16 = 0x0018;
+const TPM_ALG_RSASSA: u16 = 0x0014;
+const TPM_ALG_NULL: u16 = 0x0010;
 const TPM_ALG_SHA256: u16 = 0x000B;
 
 pub struct QuoteResult {
@@ -16,9 +18,24 @@ pub struct QuoteResult {
     pub signature: Vec<u8>,
 }
 
+/// ECDSA + SHA256 — Linux TBS-wrapped ECC AK (explicit at Quote time).
 fn ecdsa_sha256_scheme() -> Vec<u8> {
     let mut s = Vec::new();
     s.extend_from_slice(&u16(TPM_ALG_ECDSA));
+    s.extend_from_slice(&u16(TPM_ALG_SHA256));
+    s
+}
+
+/// TPM_ALG_NULL — Windows PCP RSA identity AK uses its baked-in default (RSASSA).
+/// Matches go-attestation `tpm2.Quote(..., tpm2.AlgNull)` and Microsoft PCP samples.
+pub fn pcp_rsa_quote_scheme() -> Vec<u8> {
+    u16(TPM_ALG_NULL).to_vec()
+}
+
+/// RSASSA + SHA256 — explicit fallback if NULL scheme is rejected.
+pub fn rsassa_sha256_scheme() -> Vec<u8> {
+    let mut s = Vec::new();
+    s.extend_from_slice(&u16(TPM_ALG_RSASSA));
     s.extend_from_slice(&u16(TPM_ALG_SHA256));
     s
 }
@@ -29,9 +46,14 @@ pub fn quote(
     qualifying_data: &[u8],
     bank: PcrBank,
 ) -> TpmResult<QuoteResult> {
-    quote_with_submit(sign_handle, pcr_selection, qualifying_data, bank, |cmd| {
-        submit_tpm_command(cmd)
-    })
+    quote_with_submit(
+        sign_handle,
+        pcr_selection,
+        qualifying_data,
+        bank,
+        &ecdsa_sha256_scheme(),
+        |cmd| submit_tpm_command(cmd),
+    )
 }
 
 /// Quote using a caller-provided TBS submit function (e.g. PCP-linked context on Windows).
@@ -40,11 +62,12 @@ pub fn quote_with_submit(
     pcr_selection: &[u32],
     qualifying_data: &[u8],
     bank: PcrBank,
+    sig_scheme: &[u8],
     submit: impl FnOnce(&[u8]) -> Result<Vec<u8>, String>,
 ) -> TpmResult<QuoteResult> {
     let mut params = Vec::new();
     params.extend(tpm2b(qualifying_data));
-    params.extend(ecdsa_sha256_scheme());
+    params.extend_from_slice(sig_scheme);
     params.extend(pcr_selection_list(bank, pcr_selection));
 
     let cmd = command_with_password_session(sign_handle, TPM_CC_QUOTE, &params);

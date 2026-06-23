@@ -1,7 +1,8 @@
-//! Windows Platform Crypto Provider (PCP) for AK provisioning and credential activation.
+//! Windows Platform Crypto Provider (PCP) — go-attestation model.
 //!
-//! Raw TBS cannot invoke `TPM2_ActivateCredential` on Windows; PCP exposes it via
-//! `NCryptSetProperty` / `PCP_TPM12_IDACTIVATION`.
+//! - RSA 2048 persisted identity AK (not Linux's ECDSA wrapped blob)
+//! - Activate via `PCP_TPM12_IDACTIVATION`
+//! - Quote via PCP TBS context + `TPM2_Quote` with NULL scheme (key default RSASSA)
 
 use windows::core::{w, PCWSTR};
 use windows::Win32::Security::Cryptography::{
@@ -15,11 +16,12 @@ use crate::tbs::ak_blob::{decode_pcp_blob, encode_pcp_blob, public_wire_from_pcp
 use crate::tbs::error::{TpmOpError, TpmResult};
 use crate::tbs::keys::{AkBlob, ProvisionAkResult};
 use crate::tbs::pcr::PcrBank;
-use crate::tbs::quote::{quote_with_submit, QuoteResult};
+use crate::tbs::quote::{pcp_rsa_quote_scheme, quote_with_submit, rsassa_sha256_scheme, QuoteResult};
 use crate::tbs::read_public::public_wire_to_spki_der;
 use crate::tbs::session_hmac::random_nonce_32;
 
 const KEY_USAGE_POLICY_IDENTITY: u32 = 0x8;
+const RSA_KEY_BITS: u32 = 2048;
 const NCRYPT_NO_FLAGS: NCRYPT_FLAGS = NCRYPT_FLAGS(0);
 const NCRYPT_NO_SECURITY_FLAGS: OBJECT_SECURITY_INFORMATION = OBJECT_SECURITY_INFORMATION(0);
 const NCRYPT_LEGACY_KEY_SPEC: CERT_KEY_SPEC = CERT_KEY_SPEC(0);
@@ -49,13 +51,14 @@ impl PcpProvider {
             NCryptCreatePersistedKey(
                 self.handle,
                 &mut key,
-                w!("ECDSA_P256"),
+                w!("RSA"),
                 PCWSTR(name.as_ptr()),
                 NCRYPT_LEGACY_KEY_SPEC,
                 NCRYPT_NO_FLAGS,
             )
             .map_err(ncrypt_err("NCryptCreatePersistedKey"))?;
 
+            set_u32_property(key, w!("Length"), RSA_KEY_BITS)?;
             set_u32_property(key, w!("PCP_KEY_USAGE_POLICY"), KEY_USAGE_POLICY_IDENTITY)?;
 
             NCryptFinalizeKey(key, NCRYPT_NO_FLAGS).map_err(ncrypt_err("NCryptFinalizeKey"))?;
@@ -290,9 +293,35 @@ pub fn quote_with_pcp_ak_blob(
     let tbs = pcp.tbs_context()?;
     let key = pcp.open_key(&meta.key_name)?;
     let tpm_handle = key.tpm_handle()?;
-    quote_with_submit(tpm_handle, pcr_selection, qualifying_data, bank, |cmd| {
-        crate::tbs::platform::submit_to_context(tbs, cmd)
-    })
+
+    // go-attestation: tpm2.Quote(..., AlgNull). Fall back to explicit RSASSA+SHA256.
+    let submit = |cmd: &[u8]| crate::tbs::platform::submit_to_context(tbs, cmd);
+    match quote_with_submit(
+        tpm_handle,
+        pcr_selection,
+        qualifying_data,
+        bank,
+        &pcp_rsa_quote_scheme(),
+        submit,
+    ) {
+        Ok(result) => Ok(result),
+        Err(e) if quote_scheme_retry(&e) => {
+            let submit = |cmd: &[u8]| crate::tbs::platform::submit_to_context(tbs, cmd);
+            quote_with_submit(
+                tpm_handle,
+                pcr_selection,
+                qualifying_data,
+                bank,
+                &rsassa_sha256_scheme(),
+                submit,
+            )
+        }
+        Err(e) => Err(e),
+    }
+}
+
+fn quote_scheme_retry(err: &TpmOpError) -> bool {
+    err.tpm_rc == Some(0x0000_0092) || err.tpm_rc == Some(0x0000_0192)
 }
 
 pub fn activate_credential_with_pcp_blob(

@@ -19,6 +19,7 @@ use crate::tbs::pcr::PcrBank;
 use crate::tbs::quote::{pcp_rsa_quote_scheme, quote_with_submit, rsassa_sha256_scheme, QuoteResult};
 use crate::tbs::read_public::public_wire_to_spki_der;
 use crate::tbs::session_hmac::random_nonce_32;
+use crate::tbs::wire::tpm2b;
 
 const KEY_USAGE_POLICY_IDENTITY: u32 = 0x8;
 const RSA_KEY_BITS: u32 = 2048;
@@ -113,9 +114,11 @@ impl PcpKey {
     }
 
     fn activate_credential(&self, credential_blob: &[u8], secret: &[u8]) -> TpmResult<Vec<u8>> {
-        let mut activation = Vec::with_capacity(credential_blob.len() + secret.len());
-        activation.extend_from_slice(credential_blob);
-        activation.extend_from_slice(secret);
+        // PCP expects TPM2B_ID_OBJECT || TPM2B_ENCRYPTED_SECRET (go-attestation:
+        // append(in.Credential, in.Secret...) where both are TPM2B-encoded).
+        let mut activation = Vec::with_capacity(4 + credential_blob.len() + secret.len());
+        activation.extend(tpm2b(credential_blob));
+        activation.extend(tpm2b(secret));
 
         unsafe {
             NCryptSetProperty(
@@ -126,7 +129,8 @@ impl PcpKey {
             )
             .map_err(ncrypt_err("NCryptSetProperty(PCP_TPM12_IDACTIVATION)"))?;
         }
-        get_buffer_property_key(self.handle, w!("PCP_TPM12_IDACTIVATION"))
+        let buf = get_buffer_property_key(self.handle, w!("PCP_TPM12_IDACTIVATION"))?;
+        Ok(unwrap_tpm2b_response(&buf))
     }
 }
 
@@ -169,10 +173,22 @@ fn set_u32_property(
     Ok(())
 }
 
+/// PCP may return certInfo as a bare buffer or TPM2B-wrapped digest.
+fn unwrap_tpm2b_response(buf: &[u8]) -> Vec<u8> {
+    if buf.len() >= 2 {
+        let size = u16::from_be_bytes([buf[0], buf[1]]) as usize;
+        if size + 2 == buf.len() {
+            return buf[2..].to_vec();
+        }
+    }
+    buf.to_vec()
+}
+
 fn get_buffer_property_key(key: NCRYPT_KEY_HANDLE, name: PCWSTR) -> TpmResult<Vec<u8>> {
     let mut size = 0u32;
     unsafe {
-        let _ = NCryptGetProperty(key, name, None, &mut size, NCRYPT_NO_SECURITY_FLAGS);
+        NCryptGetProperty(key, name, None, &mut size, NCRYPT_NO_SECURITY_FLAGS)
+            .map_err(ncrypt_err("NCryptGetProperty(size)"))?;
         if size == 0 {
             return Err(TpmOpError::other("NCryptGetProperty returned zero size"));
         }

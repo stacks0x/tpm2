@@ -121,9 +121,13 @@ function createTpmHandle() {
       }),
 
       /** Provision a transient AK; returns a handle with export/quote/activateCredential. */
-      provisionAk: wrapNative(async (_opts) => {
+      provisionAk: wrapNative(async (opts) => {
         requireNative('provisionAk');
-        const result = await native.provisionAk();
+        const result = await native.provisionAk({
+          keyName: opts?.keyName,
+          scope: opts?.scope,
+          overwrite: opts?.overwrite,
+        });
         return createAkHandle(result.akPublicDer, result.akBlob);
       }),
 
@@ -220,9 +224,13 @@ export const Tpm = {
   }),
 
   /** Flat native binding: provision AK (returns akPublicDer + akBlob). */
-  provisionAk: wrapNative(async () => {
+  provisionAk: wrapNative(async (opts) => {
     requireNative('provisionAk');
-    const result = await native.provisionAk();
+    const result = await native.provisionAk({
+      keyName: opts?.keyName,
+      scope: opts?.scope,
+      overwrite: opts?.overwrite,
+    });
     return {
       akPublicDer: result.akPublicDer,
       akBlob: result.akBlob,

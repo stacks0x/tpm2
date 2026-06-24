@@ -26,7 +26,11 @@ export declare function isAvailable(): Promise<boolean>
 
 export declare function pcrRead(selection: Array<number>, bank?: string | undefined | null): Promise<Record<string, string>>
 
-export declare function provisionAk(): Promise<ProvisionAkJs>
+export declare function provisionAk(opts?: {
+  keyName?: string
+  scope?: 'user' | 'machine'
+  overwrite?: boolean
+}): Promise<ProvisionAkJs>
 
 export interface ProvisionAkJs {
   akPublicDer: Buffer

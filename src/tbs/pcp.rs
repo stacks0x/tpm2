@@ -1,20 +1,27 @@
 //! Windows Platform Crypto Provider (PCP) — go-attestation model.
 //!
 //! - RSA 2048 persisted identity AK (not Linux's ECDSA wrapped blob)
-//! - Activate via `PCP_TPM12_IDACTIVATION`
+//! - User-scoped keys (PCP1) for dev; machine-scoped + DACL (PCP2) for fleet enroll
+//! - Activate via `PCP_TPM12_IDACTIVATION` (enrollment / elevated)
 //! - Quote via PCP TBS context + `TPM2_Quote` with NULL scheme (key default RSASSA)
 
 use windows::core::{w, PCWSTR};
+use windows::Win32::Security::Authorization::ConvertStringSecurityDescriptorToSecurityDescriptorW;
 use windows::Win32::Security::Cryptography::{
     NCryptCreatePersistedKey, NCryptFinalizeKey, NCryptFreeObject, NCryptGetProperty,
     NCryptOpenKey, NCryptOpenStorageProvider, NCryptSetProperty, CERT_KEY_SPEC, NCRYPT_FLAGS,
     NCRYPT_KEY_HANDLE, NCRYPT_PROV_HANDLE,
 };
-use windows::Win32::Security::OBJECT_SECURITY_INFORMATION;
+use windows::Win32::Security::{
+    GetSecurityDescriptorLength, DACL_SECURITY_INFORMATION, OBJECT_SECURITY_INFORMATION,
+    PSECURITY_DESCRIPTOR,
+};
 
-use crate::tbs::ak_blob::{decode_pcp_blob, encode_pcp_blob, public_wire_from_pcp_meta, PcpAkMetadata};
+use crate::tbs::ak_blob::{
+    decode_pcp_blob, encode_pcp_blob, public_wire_from_pcp_meta, PcpAkMetadata, PcpKeyScope,
+};
 use crate::tbs::error::{TpmOpError, TpmResult};
-use crate::tbs::keys::{AkBlob, ProvisionAkResult};
+use crate::tbs::keys::{AkBlob, ProvisionAkOptions, ProvisionAkResult};
 use crate::tbs::pcr::PcrBank;
 use crate::tbs::quote::{pcp_rsa_quote_scheme, quote_with_submit, rsassa_sha256_scheme, QuoteResult};
 use crate::tbs::read_public::public_wire_to_spki_der;
@@ -23,9 +30,14 @@ use crate::tbs::wire::tpm2b;
 
 const KEY_USAGE_POLICY_IDENTITY: u32 = 0x8;
 const RSA_KEY_BITS: u32 = 2048;
+const NCRYPT_MACHINE_KEY_FLAG: u32 = 0x0000_0020;
+const NCRYPT_OVERWRITE_KEY_FLAG: u32 = 0x0000_0040;
 const NCRYPT_NO_FLAGS: NCRYPT_FLAGS = NCRYPT_FLAGS(0);
 const NCRYPT_NO_SECURITY_FLAGS: OBJECT_SECURITY_INFORMATION = OBJECT_SECURITY_INFORMATION(0);
 const NCRYPT_LEGACY_KEY_SPEC: CERT_KEY_SPEC = CERT_KEY_SPEC(0);
+
+/// DACL: SYSTEM/Administrators full; Built-in Users read + sign/use for NCrypt key ops.
+const MACHINE_KEY_SDDL: &str = "D:(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGWGX;;;BU)";
 
 struct PcpProvider {
     handle: NCRYPT_PROV_HANDLE,
@@ -45,9 +57,36 @@ impl PcpProvider {
         Ok(Self { handle })
     }
 
-    fn create_identity_ak(&self, key_name: &str) -> TpmResult<PcpKey> {
+    fn security_descr_supported(&self) -> TpmResult<bool> {
+        let mut value: u32 = 0;
+        let mut cb = 4u32;
+        unsafe {
+            NCryptGetProperty(
+                self.handle,
+                w!("Security Descr Support"),
+                Some(std::slice::from_raw_parts_mut(
+                    (&mut value as *mut u32).cast(),
+                    4,
+                )),
+                &mut cb,
+                NCRYPT_NO_SECURITY_FLAGS,
+            )
+            .map_err(ncrypt_err("NCryptGetProperty(Security Descr Support)"))?;
+        }
+        Ok(value != 0)
+    }
+
+    fn create_identity_ak(&self, key_name: &str, opts: &ProvisionAkOptions) -> TpmResult<PcpKey> {
+        if opts.scope == PcpKeyScope::Machine && !self.security_descr_supported()? {
+            return Err(TpmOpError::other(
+                "PCP provider does not advertise Security Descr Support; \
+                 machine-scoped AK requires DACL (fleet enrollment blocked)",
+            ));
+        }
+
         let mut key = NCRYPT_KEY_HANDLE::default();
         let name = wide(key_name);
+        let create_flags = ncrypt_key_flags(opts.scope, opts.overwrite);
         unsafe {
             NCryptCreatePersistedKey(
                 self.handle,
@@ -55,35 +94,39 @@ impl PcpProvider {
                 w!("RSA"),
                 PCWSTR(name.as_ptr()),
                 NCRYPT_LEGACY_KEY_SPEC,
-                NCRYPT_NO_FLAGS,
+                create_flags,
             )
             .map_err(ncrypt_err("NCryptCreatePersistedKey"))?;
 
             set_u32_property(key, w!("Length"), RSA_KEY_BITS)?;
             set_u32_property(key, w!("PCP_KEY_USAGE_POLICY"), KEY_USAGE_POLICY_IDENTITY)?;
 
+            if opts.scope == PcpKeyScope::Machine {
+                set_machine_key_dacl(key)?;
+            }
+
             NCryptFinalizeKey(key, NCRYPT_NO_FLAGS).map_err(ncrypt_err("NCryptFinalizeKey"))?;
         }
         Ok(PcpKey { handle: key })
     }
 
-    fn open_key(&self, key_name: &str) -> TpmResult<PcpKey> {
+    fn open_key(&self, key_name: &str, scope: PcpKeyScope) -> TpmResult<PcpKey> {
         let mut key = NCRYPT_KEY_HANDLE::default();
         let name = wide(key_name);
+        let open_flags = ncrypt_key_flags(scope, false);
         unsafe {
             NCryptOpenKey(
                 self.handle,
                 &mut key,
                 PCWSTR(name.as_ptr()),
                 NCRYPT_LEGACY_KEY_SPEC,
-                NCRYPT_NO_FLAGS,
+                open_flags,
             )
             .map_err(ncrypt_err("NCryptOpenKey"))?;
         }
         Ok(PcpKey { handle: key })
     }
 
-    /// TBS context owned by PCP; valid for the lifetime of this provider handle.
     fn tbs_context(&self) -> TpmResult<*mut std::ffi::c_void> {
         let buf = get_buffer_property_prov(self.handle, w!("PCP_PLATFORMHANDLE"))?;
         parse_tbs_context(&buf)
@@ -114,8 +157,6 @@ impl PcpKey {
     }
 
     fn activate_credential(&self, credential_blob: &[u8], secret: &[u8]) -> TpmResult<Vec<u8>> {
-        // PCP expects TPM2B_ID_OBJECT || TPM2B_ENCRYPTED_SECRET (go-attestation:
-        // append(in.Credential, in.Secret...) where both are TPM2B-encoded).
         let mut activation = Vec::with_capacity(4 + credential_blob.len() + secret.len());
         activation.extend(tpm2b(credential_blob));
         activation.extend(tpm2b(secret));
@@ -142,9 +183,26 @@ impl Drop for PcpKey {
     }
 }
 
-fn random_key_name() -> String {
+fn ncrypt_key_flags(scope: PcpKeyScope, overwrite: bool) -> NCRYPT_FLAGS {
+    let mut flags = 0u32;
+    if scope == PcpKeyScope::Machine {
+        flags |= NCRYPT_MACHINE_KEY_FLAG;
+    }
+    if overwrite {
+        flags |= NCRYPT_OVERWRITE_KEY_FLAG;
+    }
+    NCRYPT_FLAGS(flags)
+}
+
+fn default_key_name() -> String {
     let nonce = random_nonce_32();
     format!("node-tpm2-ak-{}", hex_encode(&nonce))
+}
+
+fn resolve_key_name(opts: &ProvisionAkOptions) -> String {
+    opts.key_name
+        .clone()
+        .unwrap_or_else(default_key_name)
 }
 
 fn hex_encode(bytes: &[u8]) -> String {
@@ -161,11 +219,7 @@ fn ncrypt_err(context: &str) -> impl Fn(windows::core::Error) -> TpmOpError + us
     move |e: windows::core::Error| TpmOpError::other(format!("{context}: {e}"))
 }
 
-fn set_u32_property(
-    key: NCRYPT_KEY_HANDLE,
-    name: PCWSTR,
-    value: u32,
-) -> TpmResult<()> {
+fn set_u32_property(key: NCRYPT_KEY_HANDLE, name: PCWSTR, value: u32) -> TpmResult<()> {
     unsafe {
         NCryptSetProperty(key, name, &value.to_le_bytes(), NCRYPT_NO_FLAGS)
             .map_err(ncrypt_err("NCryptSetProperty"))?;
@@ -173,7 +227,35 @@ fn set_u32_property(
     Ok(())
 }
 
-/// PCP may return certInfo as a bare buffer or TPM2B-wrapped digest.
+fn set_machine_key_dacl(key: NCRYPT_KEY_HANDLE) -> TpmResult<()> {
+    let sddl = wide(MACHINE_KEY_SDDL);
+    let mut sd: PSECURITY_DESCRIPTOR = PSECURITY_DESCRIPTOR::default();
+    unsafe {
+        ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            PCWSTR(sddl.as_ptr()),
+            1,
+            &mut sd,
+            None,
+        )
+        .map_err(ncrypt_err("ConvertStringSecurityDescriptorToSecurityDescriptorW"))?;
+
+        let len = GetSecurityDescriptorLength(sd);
+        if len == 0 {
+            return Err(TpmOpError::other("empty security descriptor from SDDL"));
+        }
+        let sd_bytes = std::slice::from_raw_parts(sd.0.cast(), len as usize);
+
+        NCryptSetProperty(
+            key,
+            w!("Security Descr"),
+            sd_bytes,
+            NCRYPT_FLAGS(DACL_SECURITY_INFORMATION.0),
+        )
+        .map_err(ncrypt_err("NCryptSetProperty(Security Descr)"))?;
+    }
+    Ok(())
+}
+
 fn unwrap_tpm2b_response(buf: &[u8]) -> Vec<u8> {
     if buf.len() >= 2 {
         let size = u16::from_be_bytes([buf[0], buf[1]]) as usize;
@@ -203,7 +285,8 @@ fn get_buffer_property_key(key: NCRYPT_KEY_HANDLE, name: PCWSTR) -> TpmResult<Ve
 fn get_buffer_property_prov(prov: NCRYPT_PROV_HANDLE, name: PCWSTR) -> TpmResult<Vec<u8>> {
     let mut size = 0u32;
     unsafe {
-        let _ = NCryptGetProperty(prov, name, None, &mut size, NCRYPT_NO_SECURITY_FLAGS);
+        NCryptGetProperty(prov, name, None, &mut size, NCRYPT_NO_SECURITY_FLAGS)
+            .map_err(ncrypt_err("NCryptGetProperty(size)"))?;
         if size == 0 {
             return Err(TpmOpError::other("NCryptGetProperty returned zero size"));
         }
@@ -215,7 +298,6 @@ fn get_buffer_property_prov(prov: NCRYPT_PROV_HANDLE, name: PCWSTR) -> TpmResult
     }
 }
 
-/// TPM 2.0 PCP ID binding blob: TPM2B_PUBLIC, TPM2B_CREATION_DATA, TPM2B_ATTEST, TPMT_SIGNATURE.
 fn decode_id_binding(blob: &[u8]) -> TpmResult<PcpAkMetadata> {
     if blob.len() < 4 {
         return Err(TpmOpError::other("PCP ID binding blob too short"));
@@ -230,6 +312,7 @@ fn decode_id_binding(blob: &[u8]) -> TpmResult<PcpAkMetadata> {
     }
     Ok(PcpAkMetadata {
         key_name: String::new(),
+        scope: PcpKeyScope::User,
         raw_public,
         raw_creation_data,
         raw_attest,
@@ -278,17 +361,22 @@ fn parse_tpm_object_handle(buf: &[u8]) -> TpmResult<u32> {
     Ok(u32::from_le_bytes(buf[..4].try_into().expect("4 bytes")))
 }
 
-pub fn provision_ak_blob() -> TpmResult<AkBlob> {
+pub fn provision_ak_blob_with_options(opts: &ProvisionAkOptions) -> TpmResult<AkBlob> {
     let pcp = PcpProvider::open()?;
-    let key_name = random_key_name();
-    let key = pcp.create_identity_ak(&key_name)?;
+    let key_name = resolve_key_name(opts);
+    let key = pcp.create_identity_ak(&key_name, opts)?;
     let mut meta = key.id_binding()?;
     meta.key_name = key_name;
+    meta.scope = opts.scope;
     Ok(encode_pcp_blob(&meta))
 }
 
-pub fn provision_ak() -> TpmResult<ProvisionAkResult> {
-    let ak_blob = provision_ak_blob()?;
+pub fn provision_ak_blob() -> TpmResult<AkBlob> {
+    provision_ak_blob_with_options(&ProvisionAkOptions::default())
+}
+
+pub fn provision_ak_with_options(opts: &ProvisionAkOptions) -> TpmResult<ProvisionAkResult> {
+    let ak_blob = provision_ak_blob_with_options(opts)?;
     let meta = decode_pcp_blob(&ak_blob)?;
     let wire = public_wire_from_pcp_meta(&meta);
     let ak_public_der = public_wire_to_spki_der(&wire)?;
@@ -296,6 +384,22 @@ pub fn provision_ak() -> TpmResult<ProvisionAkResult> {
         ak_public_der,
         ak_blob,
     })
+}
+
+pub fn provision_ak() -> TpmResult<ProvisionAkResult> {
+    provision_ak_with_options(&ProvisionAkOptions::default())
+}
+
+/// Probe helper: report PCP security-descriptor support (required for machine keys).
+pub fn pcp_capabilities() -> TpmResult<PcpCapabilities> {
+    let pcp = PcpProvider::open()?;
+    Ok(PcpCapabilities {
+        security_descr_supported: pcp.security_descr_supported()?,
+    })
+}
+
+pub struct PcpCapabilities {
+    pub security_descr_supported: bool,
 }
 
 pub fn quote_with_pcp_ak_blob(
@@ -307,10 +411,9 @@ pub fn quote_with_pcp_ak_blob(
     let meta = decode_pcp_blob(ak_blob)?;
     let pcp = PcpProvider::open()?;
     let tbs = pcp.tbs_context()?;
-    let key = pcp.open_key(&meta.key_name)?;
+    let key = pcp.open_key(&meta.key_name, meta.scope)?;
     let tpm_handle = key.tpm_handle()?;
 
-    // go-attestation: tpm2.Quote(..., AlgNull). Fall back to explicit RSASSA+SHA256.
     let submit = |cmd: &[u8]| crate::tbs::platform::submit_to_context(tbs, cmd);
     match quote_with_submit(
         tpm_handle,
@@ -347,6 +450,18 @@ pub fn activate_credential_with_pcp_blob(
 ) -> TpmResult<Vec<u8>> {
     let meta = decode_pcp_blob(ak_blob)?;
     let pcp = PcpProvider::open()?;
-    let key = pcp.open_key(&meta.key_name)?;
+    let key = pcp.open_key(&meta.key_name, meta.scope)?;
     key.activate_credential(credential_blob, secret)
+}
+
+/// True when the process token is elevated (admin). PCP activation requires this.
+pub fn is_process_elevated() -> bool {
+    unsafe { windows::Win32::UI::Shell::IsUserAnAdmin().as_bool() }
+}
+
+/// True when running as NT AUTHORITY\\SYSTEM (e.g. PsExec -s). Fleet enrollment context.
+pub fn is_running_as_system() -> bool {
+    std::env::var("USERNAME")
+        .map(|u| u.eq_ignore_ascii_case("SYSTEM"))
+        .unwrap_or(false)
 }

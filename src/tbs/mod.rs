@@ -19,7 +19,7 @@ pub mod session_hmac;
 pub mod wire;
 
 #[cfg(windows)]
-mod pcp;
+pub mod pcp;
 
 #[cfg(windows)]
 mod platform;

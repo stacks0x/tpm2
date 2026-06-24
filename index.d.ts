@@ -27,6 +27,17 @@ export declare type ReadPublicResult = {
   name: Buffer;
 };
 
+export declare type ProvisionAkOptions = {
+  /** Persisted PCP key name on Windows. Omitted = random dev name. */
+  keyName?: string;
+  /** Windows only: `user` (default) or `machine` (fleet enrollment). */
+  scope?: 'user' | 'machine';
+  /** Windows only: replace existing persisted key of the same name. */
+  overwrite?: boolean;
+  /** @deprecated Linux-only hint; Windows PCP always uses RSA identity AK. */
+  algorithm?: 'ecc' | 'rsa';
+};
+
 export declare type ProvisionAkResult = {
   akPublicDer: Buffer;
   akBlob: AkBlob;
@@ -62,7 +73,7 @@ export declare interface TpmHandle {
   };
   attest: {
     ekCertificate(): Promise<Buffer | null>;
-    provisionAk(opts?: { algorithm?: 'ecc' | 'rsa' }): Promise<AkHandle>;
+    provisionAk(opts?: ProvisionAkOptions): Promise<AkHandle>;
     quote(opts: QuoteOptions): Promise<QuoteResult>;
   };
   readPublic(handle: string): Promise<ReadPublicResult>;
@@ -78,7 +89,7 @@ export declare const Tpm: {
   readPublic(handle: string): Promise<ReadPublicResult>;
   readEkCertificate(): Promise<Buffer | null>;
   quote(opts: QuoteOptions): Promise<QuoteResult>;
-  provisionAk(opts?: { algorithm?: 'ecc' | 'rsa' }): Promise<ProvisionAkResult>;
+  provisionAk(opts?: ProvisionAkOptions): Promise<ProvisionAkResult>;
   activateCredential(opts: ActivateCredentialFlatOptions): Promise<Buffer>;
 };
 
@@ -94,7 +105,7 @@ export declare function readEkCertificate(): Promise<Buffer | null>;
 export declare function quote(opts: QuoteOptions): Promise<QuoteResult>;
 
 export declare function provisionAk(
-  opts?: { algorithm?: 'ecc' | 'rsa' },
+  opts?: ProvisionAkOptions,
 ): Promise<ProvisionAkResult>;
 
 export declare function activateCredential(

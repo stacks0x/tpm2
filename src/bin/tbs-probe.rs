@@ -1,12 +1,19 @@
-//! Direct-TBS validation probes (Option B). Linux and Windows, non-elevated.
+//! Direct-TBS validation probes (Option B). Linux and Windows, non-elevated by default.
+//!
+//! Windows PCP activation requires elevation; `all` skips activate when unprivileged.
+//! Cross-user fleet spike: `machine-provision` (SYSTEM) then `quote-blob` (standard user).
 
+use node_tpm2::tbs::ak_blob::{is_pcp_blob, pcp_key_scope};
 use node_tpm2::tbs::commands::{create_primary_candidates, get_random_8, tpm_rc_from_response, tpm_rc_name};
 use node_tpm2::tbs::credential::credential_roundtrip_self_test;
-use node_tpm2::tbs::keys::{provision_ak, provision_ak_blob};
+use node_tpm2::tbs::keys::{provision_ak, provision_ak_blob, provision_ak_with_options, AkBlob, ProvisionAkOptions};
 use node_tpm2::tbs::parse::attest_extra_data;
 use node_tpm2::tbs::pcr::{pcr_read, PcrBank};
 use node_tpm2::tbs::quote::quote_with_ak_blob;
 use node_tpm2::tbs::rc::{classify_tpm_rc, describe_tpm_rc, RcClass};
+
+#[cfg(windows)]
+use node_tpm2::tbs::ak_blob::PcpKeyScope;
 
 fn main() {
     let cmd = std::env::args().nth(1).unwrap_or_else(|| "all".to_string());
@@ -19,12 +26,16 @@ fn main() {
         "provision-ak" => run_provision_ak(),
         "activate-credential" => run_activate_credential(),
         "policy-secret" => run_policy_secret(),
+        #[cfg(windows)]
+        "pcp-capabilities" => run_pcp_capabilities(),
+        #[cfg(windows)]
+        "machine-provision" => run_machine_provision(),
+        #[cfg(windows)]
+        "quote-blob" => run_quote_blob(),
         "all" => run_all(),
         other => {
             eprintln!("unknown command: {other}");
-            eprintln!(
-                "usage: tbs-probe [get-random|create-primary|pcr-read|quote|provision-ak|activate-credential|all]"
-            );
+            print_usage();
             std::process::exit(2);
         }
     };
@@ -33,6 +44,20 @@ fn main() {
         eprintln!("tbs-probe FAILED: {e}");
         std::process::exit(1);
     }
+}
+
+fn print_usage() {
+    eprintln!(
+        "usage: tbs-probe [get-random|create-primary|pcr-read|quote|provision-ak|\
+         activate-credential|policy-secret|all]"
+    );
+    #[cfg(windows)]
+    eprintln!(
+        "       tbs-probe [pcp-capabilities|machine-provision|quote-blob]\n\
+         cross-user spike:\n\
+           PsExec -s tbs-probe machine-provision --key-name hardproof-device-ak --out ak.blob\n\
+           tbs-probe quote-blob --in ak.blob"
+    );
 }
 
 fn run_all() -> Result<(), String> {
@@ -112,14 +137,13 @@ fn run_quote() -> Result<(), String> {
     println!("== quote (wrapped AK blob, qualifyingData -> extraData) ==");
 
     let blob = provision_ak_blob().map_err(|e| e.message)?;
-    println!(
-        "  ak blob: public={} bytes, private={} bytes",
-        blob.public.len(),
-        blob.private.len()
-    );
+    print_blob_summary(&blob);
+    quote_blob_roundtrip(&blob)
+}
 
+fn quote_blob_roundtrip(blob: &AkBlob) -> Result<(), String> {
     let qualifying = b"node-tpm2-tbs-probe-qualifying-data";
-    let result = quote_with_ak_blob(&blob, &[0, 1, 7], qualifying, PcrBank::Sha256)
+    let result = quote_with_ak_blob(blob, &[0, 1, 7], qualifying, PcrBank::Sha256)
         .map_err(|e| e.message)?;
 
     println!("  quote message: {} bytes", result.message.len());
@@ -138,17 +162,22 @@ fn run_provision_ak() -> Result<(), String> {
 
     let result = provision_ak().map_err(|e| e.message)?;
     println!("  ak public DER: {} bytes", result.ak_public_der.len());
-    println!(
-        "  ak blob: public={} bytes, private={} bytes",
-        result.ak_blob.public.len(),
-        result.ak_blob.private.len()
-    );
+    print_blob_summary(&result.ak_blob);
     println!("  PASS  provisionAk returned exportable blob");
     Ok(())
 }
 
 fn run_activate_credential() -> Result<(), String> {
     println!("== activate-credential (MakeCredential + ActivateCredential) ==");
+
+    #[cfg(windows)]
+    if !node_tpm2::tbs::pcp::is_process_elevated() {
+        println!(
+            "  SKIP  PCP ActivateCredential requires elevation (Microsoft PCP / go-attestation #177); \
+             runtime uses quote-only"
+        );
+        return Ok(());
+    }
 
     let blob = provision_ak_blob().map_err(|e| e.message)?;
     match credential_roundtrip_self_test(&blob) {
@@ -161,6 +190,141 @@ fn run_activate_credential() -> Result<(), String> {
         }
         Err(e) => Err(e.message),
     }
+}
+
+#[cfg(windows)]
+fn run_pcp_capabilities() -> Result<(), String> {
+    println!("== pcp-capabilities ==");
+    let caps = node_tpm2::tbs::pcp::pcp_capabilities().map_err(|e| e.message)?;
+    println!(
+        "  Security Descr Support: {}",
+        caps.security_descr_supported
+    );
+    println!(
+        "  process elevated: {}",
+        node_tpm2::tbs::pcp::is_process_elevated()
+    );
+    println!(
+        "  running as SYSTEM: {}",
+        node_tpm2::tbs::pcp::is_running_as_system()
+    );
+    if !caps.security_descr_supported {
+        println!("  WARN  machine-scoped AK (fleet enroll) requires Security Descr Support");
+    }
+    println!("  PASS  pcp-capabilities reported");
+    Ok(())
+}
+
+#[cfg(windows)]
+fn run_machine_provision() -> Result<(), String> {
+    println!("== machine-provision (PCP2 machine-scoped AK) ==");
+
+    let key_name = flag_value("--key-name")
+        .or_else(|| std::env::var("TPM2_KEY_NAME").ok())
+        .unwrap_or_else(|| "node-tpm2-machine-ak".to_string());
+    let out_path = flag_value("--out")
+        .or_else(|| std::env::var("TPM2_AK_BLOB_PATH").ok())
+        .unwrap_or_else(|| "ak.blob".to_string());
+
+    if !node_tpm2::tbs::pcp::is_process_elevated() && !node_tpm2::tbs::pcp::is_running_as_system() {
+        return Err(
+            "machine-provision requires elevation or SYSTEM (PsExec -s)".to_string(),
+        );
+    }
+
+    let opts = ProvisionAkOptions {
+        key_name: Some(key_name.clone()),
+        scope: PcpKeyScope::Machine,
+        overwrite: true,
+    };
+    let result = provision_ak_with_options(&opts).map_err(|e| e.message)?;
+    print_blob_summary(&result.ak_blob);
+    write_ak_blob_file(&out_path, &result.ak_blob)?;
+    println!("  key name: {key_name}");
+    println!("  wrote blob: {out_path}");
+    println!("  PASS  machine AK provisioned (run quote-blob as standard user next)");
+    Ok(())
+}
+
+#[cfg(windows)]
+fn run_quote_blob() -> Result<(), String> {
+    println!("== quote-blob (quote from persisted AK blob file) ==");
+
+    let in_path = flag_value("--in")
+        .or_else(|| std::env::var("TPM2_AK_BLOB_PATH").ok())
+        .unwrap_or_else(|| "ak.blob".to_string());
+
+    let blob = read_ak_blob_file(&in_path)?;
+    print_blob_summary(&blob);
+    if pcp_key_scope(&blob) != Some(PcpKeyScope::Machine) {
+        println!("  WARN  blob is not PCP2 machine-scoped; cross-user spike expects machine key");
+    }
+    quote_blob_roundtrip(&blob)
+}
+
+fn print_blob_summary(blob: &AkBlob) {
+    let scope = pcp_key_scope(blob)
+        .map(|s| format!("{s:?}"))
+        .unwrap_or_else(|| "linux".to_string());
+    println!(
+        "  ak blob: scope={scope}, public={} bytes, private={} bytes",
+        blob.public.len(),
+        blob.private.len()
+    );
+    if is_pcp_blob(blob) {
+        if let Ok(meta) = node_tpm2::tbs::ak_blob::decode_pcp_blob(blob) {
+            println!("  pcp key name: {}", meta.key_name);
+        }
+    }
+}
+
+fn flag_value(name: &str) -> Option<String> {
+    let mut args = std::env::args().skip(2);
+    while let Some(arg) = args.next() {
+        if arg == name {
+            return args.next();
+        }
+        if let Some(rest) = arg.strip_prefix(&format!("{name}=")) {
+            return Some(rest.to_string());
+        }
+    }
+    None
+}
+
+const AKBL_MAGIC: &[u8; 4] = b"AKBL";
+
+#[cfg(windows)]
+fn write_ak_blob_file(path: &str, blob: &AkBlob) -> Result<(), String> {
+    let mut out = Vec::new();
+    out.extend_from_slice(AKBL_MAGIC);
+    out.extend_from_slice(&(blob.public.len() as u32).to_le_bytes());
+    out.extend_from_slice(&blob.public);
+    out.extend_from_slice(&(blob.private.len() as u32).to_le_bytes());
+    out.extend_from_slice(&blob.private);
+    std::fs::write(path, out).map_err(|e| format!("write {path}: {e}"))
+}
+
+#[cfg(windows)]
+fn read_ak_blob_file(path: &str) -> Result<AkBlob, String> {
+    let data = std::fs::read(path).map_err(|e| format!("read {path}: {e}"))?;
+    if data.len() < 12 || &data[..4] != AKBL_MAGIC {
+        return Err(format!("{path}: expected AKBL magic header"));
+    }
+    let mut off = 4;
+    let pub_len = u32::from_le_bytes(data[off..off + 4].try_into().expect("4")) as usize;
+    off += 4;
+    if off + pub_len + 4 > data.len() {
+        return Err(format!("{path}: truncated public field"));
+    }
+    let public = data[off..off + pub_len].to_vec();
+    off += pub_len;
+    let priv_len = u32::from_le_bytes(data[off..off + 4].try_into().expect("4")) as usize;
+    off += 4;
+    if off + priv_len > data.len() {
+        return Err(format!("{path}: truncated private field"));
+    }
+    let private = data[off..off + priv_len].to_vec();
+    Ok(AkBlob { public, private })
 }
 
 fn run_policy_secret() -> Result<(), String> {

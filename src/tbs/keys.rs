@@ -25,6 +25,20 @@ pub struct ProvisionAkResult {
     pub ak_blob: AkBlob,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct ProvisionAkOptions {
+    /// Persisted PCP key name on Windows. Random when omitted.
+    pub key_name: Option<String>,
+    #[cfg(windows)]
+    pub scope: crate::tbs::ak_blob::PcpKeyScope,
+    /// Replace an existing persisted key of the same name (Windows enrollment idempotency).
+    #[cfg(windows)]
+    pub overwrite: bool,
+}
+
+#[cfg(windows)]
+pub use crate::tbs::ak_blob::PcpKeyScope;
+
 #[derive(Debug, Clone)]
 pub struct AkBlob {
     pub public: Vec<u8>,
@@ -131,6 +145,11 @@ pub fn flush_transient(handle: u32) -> TpmResult<()> {
 /// Provision a wrapped AK blob under a freshly created storage primary; flushes the primary.
 #[cfg(not(windows))]
 pub fn provision_ak_blob() -> TpmResult<AkBlob> {
+    provision_ak_blob_with_options(&ProvisionAkOptions::default())
+}
+
+#[cfg(not(windows))]
+pub fn provision_ak_blob_with_options(_opts: &ProvisionAkOptions) -> TpmResult<AkBlob> {
     let primary = create_storage_primary()?;
     let blob = create_ak(primary.handle)?;
     primary.flush()?;
@@ -142,10 +161,20 @@ pub fn provision_ak_blob() -> TpmResult<AkBlob> {
     crate::tbs::pcp::provision_ak_blob()
 }
 
+#[cfg(windows)]
+pub fn provision_ak_blob_with_options(opts: &ProvisionAkOptions) -> TpmResult<AkBlob> {
+    crate::tbs::pcp::provision_ak_blob_with_options(opts)
+}
+
 /// Provision AK and return SPKI DER + wrapped blob (spec §4.3 `provisionAk`).
 #[cfg(not(windows))]
 pub fn provision_ak() -> TpmResult<ProvisionAkResult> {
-    let ak_blob = provision_ak_blob()?;
+    provision_ak_with_options(&ProvisionAkOptions::default())
+}
+
+#[cfg(not(windows))]
+pub fn provision_ak_with_options(_opts: &ProvisionAkOptions) -> TpmResult<ProvisionAkResult> {
+    let ak_blob = provision_ak_blob_with_options(_opts)?;
     let ak_public_der = crate::tbs::read_public::public_wire_to_spki_der(&ak_blob.public)?;
     Ok(ProvisionAkResult {
         ak_public_der,
@@ -156,6 +185,11 @@ pub fn provision_ak() -> TpmResult<ProvisionAkResult> {
 #[cfg(windows)]
 pub fn provision_ak() -> TpmResult<ProvisionAkResult> {
     crate::tbs::pcp::provision_ak()
+}
+
+#[cfg(windows)]
+pub fn provision_ak_with_options(opts: &ProvisionAkOptions) -> TpmResult<ProvisionAkResult> {
+    crate::tbs::pcp::provision_ak_with_options(opts)
 }
 
 #[cfg(test)]

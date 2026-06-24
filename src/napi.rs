@@ -28,6 +28,15 @@ pub struct AkBlobJs {
 }
 
 #[napi(object)]
+pub struct ProvisionAkOptionsJs {
+    pub key_name: Option<String>,
+    /// Windows only: `"user"` (default) or `"machine"`.
+    pub scope: Option<String>,
+    /// Windows only: replace existing persisted key of the same name.
+    pub overwrite: Option<bool>,
+}
+
+#[napi(object)]
 pub struct ProvisionAkJs {
     pub ak_public_der: Buffer,
     pub ak_blob: AkBlobJs,
@@ -161,14 +170,15 @@ pub async fn quote(opts: QuoteOptionsJs) -> Result<QuoteJs> {
 }
 
 #[napi]
-pub async fn provision_ak() -> Result<ProvisionAkJs> {
+pub async fn provision_ak(opts: Option<ProvisionAkOptionsJs>) -> Result<ProvisionAkJs> {
     #[cfg(not(any(windows, target_os = "linux")))]
     {
         return Err(TpmOpError::unavailable("TPM is not available on this platform").into());
     }
     #[cfg(any(windows, target_os = "linux"))]
     {
-        let result = crate::tbs::keys::provision_ak()?;
+        let options = provision_options_from_js(opts);
+        let result = crate::tbs::keys::provision_ak_with_options(&options)?;
         Ok(ProvisionAkJs {
             ak_public_der: Buffer::from(result.ak_public_der),
             ak_blob: AkBlobJs {
@@ -177,6 +187,23 @@ pub async fn provision_ak() -> Result<ProvisionAkJs> {
             },
         })
     }
+}
+
+fn provision_options_from_js(opts: Option<ProvisionAkOptionsJs>) -> crate::tbs::keys::ProvisionAkOptions {
+    let mut options = crate::tbs::keys::ProvisionAkOptions::default();
+    if let Some(opts) = opts {
+        options.key_name = opts.key_name;
+        #[cfg(windows)]
+        {
+            use crate::tbs::ak_blob::PcpKeyScope;
+            options.scope = match opts.scope.as_deref() {
+                Some("machine") => PcpKeyScope::Machine,
+                _ => PcpKeyScope::User,
+            };
+            options.overwrite = opts.overwrite.unwrap_or(false);
+        }
+    }
+    options
 }
 
 #[napi]

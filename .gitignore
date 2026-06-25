@@ -148,8 +148,5 @@ vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 .vite/
 
-# Local planning / maintainer docs (not published with the package)
-/docs/tpm2-library-spec.md
-/docs/tpm2-build-plan.md
-/docs/release-checklist.md
-/docs/publishing.md
+# Maintainer planning docs (local only — not in git, not on npm)
+/dev/

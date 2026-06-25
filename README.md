@@ -68,7 +68,7 @@ cargo build --no-default-features --features probe-bin --bin tbs-probe
 
 Linux: user needs access to `/dev/tpmrm0` (typically the `tss` group).
 
-Maintainer-only planning docs (release checklists, specs) go in `dev/` — that folder is gitignored and never published.
+Maintainer-only planning docs (release checklists, specs) go in `docs/dev/` — that folder is gitignored and never published.
 
 ## License
 

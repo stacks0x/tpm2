@@ -149,4 +149,4 @@ vite.config.ts.timestamp-*
 .vite/
 
 # Maintainer planning docs (local only — not in git, not on npm)
-/dev/
+/docs/dev/

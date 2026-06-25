@@ -39,7 +39,8 @@
     "api.js",
     "native.cjs",
     "native.d.ts",
-    "docs",
+    "docs/getting-started.md",
+    "docs/windows-pcp.md",
     "examples"
   ],
   "engines": {

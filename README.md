@@ -48,8 +48,6 @@ node node_modules/node-tpm2/examples/smoke-test.mjs provision-machine --key-name
 node node_modules/node-tpm2/examples/smoke-test.mjs quote --in ak.blob.json
 ```
 
-Full release gates: [docs/release-checklist.md](./docs/release-checklist.md).
-
 ## Development (this repo)
 
 ```bash

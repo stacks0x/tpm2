@@ -148,5 +148,6 @@ vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 .vite/
 
-# Local planning / spec docs (not published with the package)
-/docs/
+# Local planning docs (not published with the package)
+/docs/tpm2-library-spec.md
+/docs/tpm2-build-plan.md

@@ -1,14 +1,12 @@
 # node-tpm2
 
-Native TPM 2.0 for Node. Zero tooling, no admin.
+Native TPM 2.0 for Node. Zero tooling at install time — prebuilt napi-rs binaries, no tpm2-tss, no tpm2-tools.
 
-- Windows via TBS, Linux via `/dev/tpmrm0`.
-- Direct TBS command marshalling — no tpm2-tss, no tpm2-tools at install or runtime.
-- Ships as prebuilt native binaries via napi-rs platform packages.
-
-> **Status: pre-release.** `Tpm.isAvailable()`, `Tpm.info()`, `Tpm.open().pcr.read()`,
-> `readPublic`, `readEkCertificate`, and `quote` work on Windows and Linux.
-> `provisionAk` and credential activation are not implemented yet.
+| Platform | Backend | Attestation key |
+|----------|---------|-----------------|
+| Linux | `/dev/tpmrm0` | ECDSA P-256 wrapped blob |
+| Windows | TBS + NCrypt PCP | RSA-2048 persisted PCP key |
+| macOS | — | Not supported (returns unavailable) |
 
 ## Install
 
@@ -16,47 +14,61 @@ Native TPM 2.0 for Node. Zero tooling, no admin.
 npm install node-tpm2
 ```
 
-npm resolves exactly one prebuilt native binary from `optionalDependencies` — no build step,
-no tpm2-tools, no Rust. Requires platform packages published for your OS/arch.
+Requires Node 20+. Resolves a prebuilt `.node` binary for your OS/arch via optional platform packages.
 
-## Development
+## Quick start
+
+```javascript
+import { Tpm } from 'node-tpm2';
+
+if (!(await Tpm.isAvailable())) throw new Error('no TPM');
+
+const { akBlob } = await Tpm.provisionAk();
+const quote = await Tpm.quote({
+  akBlob,
+  pcrSelection: [0, 1, 7],
+  qualifyingData: Buffer.from('challenge-bytes'),
+});
+```
+
+See [docs/getting-started.md](./docs/getting-started.md) for API details and [docs/windows-pcp.md](./docs/windows-pcp.md) for Windows machine-scoped keys (privileged install → unprivileged quote).
+
+## Validate install (clean machine)
+
+After `npm install`, run the npm smoke test — **not** the Rust probe:
+
+```bash
+node node_modules/node-tpm2/examples/smoke-test.mjs runtime
+```
+
+Windows fleet path (Admin/SYSTEM provision, then standard user quote):
+
+```bash
+node node_modules/node-tpm2/examples/smoke-test.mjs provision-machine --key-name my-app-device-ak --out ak.blob.json
+node node_modules/node-tpm2/examples/smoke-test.mjs quote --in ak.blob.json
+```
+
+Full release gates: [docs/release-checklist.md](./docs/release-checklist.md).
+
+## Development (this repo)
 
 ```bash
 git clone https://github.com/stacks0x/tpm2.git
 cd tpm2
 npm install
 npm run build
-node --input-type=module -e "
-  import { Tpm } from './index.js';
-  console.log('available', await Tpm.isAvailable());
-  console.log('info', await Tpm.info());
-"
+node examples/smoke-test.mjs runtime
 ```
 
-On Linux, your user needs read/write on `/dev/tpmrm0` (typically the `tss` group).
-
-## Windows probe (direct TBS validation)
-
-Build once:
+Rust probe (developers, not the npm artifact):
 
 ```powershell
 cargo build --no-default-features --features probe-bin --bin tbs-probe
-```
-
-**Standard PowerShell (no admin)** — validates the runtime path (quote, provision, etc.):
-
-```powershell
 .\target\debug\tbs-probe.exe all
-```
-
-Activate is skipped when not elevated; that is expected. Full step-by-step guide
-(including optional fleet machine-key spike):
-
-```powershell
 .\target\debug\tbs-probe.exe help
 ```
 
-See [spike/README.md](./spike/README.md) for RC discipline.
+Linux: user needs access to `/dev/tpmrm0` (typically the `tss` group).
 
 ## License
 

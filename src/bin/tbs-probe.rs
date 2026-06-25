@@ -1,7 +1,8 @@
 //! Direct-TBS validation probes (Option B). Linux and Windows, non-elevated by default.
 //!
 //! Windows PCP activation requires elevation; `all` skips activate when unprivileged.
-//! Cross-user fleet spike: `machine-provision` (SYSTEM) then `quote-blob` (standard user).
+//! Fleet cross-user spike: elevated `machine-provision`, then standard `quote-blob`.
+//! Run `tbs-probe help` on Windows for step-by-step instructions.
 
 use node_tpm2::tbs::ak_blob::{is_pcp_blob, pcp_key_scope};
 use node_tpm2::tbs::commands::{create_primary_candidates, get_random_8, tpm_rc_from_response, tpm_rc_name};
@@ -32,6 +33,11 @@ fn main() {
         "machine-provision" => run_machine_provision(),
         #[cfg(windows)]
         "quote-blob" => run_quote_blob(),
+        #[cfg(windows)]
+        "help" | "--help" | "-h" => {
+            print_windows_help();
+            Ok(())
+        }
         "all" => run_all(),
         other => {
             eprintln!("unknown command: {other}");
@@ -47,17 +53,82 @@ fn main() {
 }
 
 fn print_usage() {
-    eprintln!(
-        "usage: tbs-probe [get-random|create-primary|pcr-read|quote|provision-ak|\
-         activate-credential|policy-secret|all]"
-    );
+    eprintln!("usage: tbs-probe <command>");
+    eprintln!("  get-random | create-primary | pcr-read | quote | provision-ak");
+    eprintln!("  activate-credential | policy-secret | all");
     #[cfg(windows)]
-    eprintln!(
-        "       tbs-probe [pcp-capabilities|machine-provision|quote-blob]\n\
-         cross-user spike:\n\
-           PsExec -s tbs-probe machine-provision --key-name hardproof-device-ak --out ak.blob\n\
-           tbs-probe quote-blob --in ak.blob"
+    {
+        eprintln!("  pcp-capabilities | machine-provision | quote-blob | help");
+        eprintln!();
+        eprintln!("Windows: run `tbs-probe help` for testing instructions.");
+    }
+}
+
+#[cfg(windows)]
+fn print_windows_help() {
+    let exe = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.to_str().map(String::from))
+        .unwrap_or_else(|| "target\\debug\\tbs-probe.exe".to_string());
+
+    println!(
+        r#"tbs-probe — Windows testing guide
+================================
+
+BUILD (once, any shell):
+  cargo build --no-default-features --features probe-bin --bin tbs-probe
+
+────────────────────────────────────────────────────────────────────
+1. RUNTIME PATH (standard PowerShell — no admin)
+────────────────────────────────────────────────────────────────────
+This is what a locked-down desktop app does day-to-day: quote only.
+
+  {exe} all
+
+You already passed this if you see "tbs-probe: all checks passed".
+Activate is intentionally SKIPped here (PCP requires admin at enroll time).
+
+────────────────────────────────────────────────────────────────────
+2. OPTIONAL — fleet cross-user spike (machine-scoped AK)
+────────────────────────────────────────────────────────────────────
+Tests whether a machine key created elevated can be quoted by a
+standard user. Only needed before shipping fleet enrollment.
+
+STEP A — Administrator PowerShell (Start menu → PowerShell → Run as administrator):
+  cd C:\projects
+  {exe} pcp-capabilities
+  {exe} machine-provision --key-name YOUR-KEY-NAME --out ak.blob
+
+  (Replace YOUR-KEY-NAME with your product key name, e.g. hardproof-device-ak.
+   No PsExec required — Admin PowerShell is enough for this VM spike.)
+
+STEP B — back in standard PowerShell (same machine, this window):
+  cd C:\projects
+  {exe} quote-blob --in ak.blob
+
+PASS on step B = standard user can quote the machine AK.
+
+────────────────────────────────────────────────────────────────────
+3. OPTIONAL — full activate roundtrip (enrollment proof)
+────────────────────────────────────────────────────────────────────
+Run in Administrator PowerShell only:
+
+  {exe} activate-credential
+
+────────────────────────────────────────────────────────────────────
+Notes
+────────────────────────────────────────────────────────────────────
+- PsExec / SYSTEM is NOT required for local VM testing. Intune/SCCM
+  deploy as SYSTEM in production; simulate that later if Admin vs SYSTEM
+  behaves differently (scheduled task, PsExec -s — optional).
+- Env vars: TPM2_KEY_NAME, TPM2_AK_BLOB_PATH override defaults.
+"#
     );
+}
+
+#[cfg(not(windows))]
+fn print_windows_help() {
+    println!("help: Windows-only (machine PCP spike). On Linux, use: tbs-probe all");
 }
 
 fn run_all() -> Result<(), String> {
@@ -69,6 +140,10 @@ fn run_all() -> Result<(), String> {
     run_activate_credential()?;
     run_policy_secret()?;
     println!("\ntbs-probe: all checks passed");
+    #[cfg(windows)]
+    if !node_tpm2::tbs::pcp::is_process_elevated() {
+        println!("(Windows runtime path OK. Fleet machine-key spike: tbs-probe help)");
+    }
     Ok(())
 }
 
@@ -227,9 +302,22 @@ fn run_machine_provision() -> Result<(), String> {
         .unwrap_or_else(|| "ak.blob".to_string());
 
     if !node_tpm2::tbs::pcp::is_process_elevated() && !node_tpm2::tbs::pcp::is_running_as_system() {
-        return Err(
-            "machine-provision requires elevation or SYSTEM (PsExec -s)".to_string(),
-        );
+        return Err(format!(
+            "machine-provision must run elevated.\n\
+             Open Start → Windows PowerShell → Run as administrator, then:\n\
+             \n\
+             cd {}\n\
+             {} machine-provision --key-name {key_name} --out {out_path}\n\
+             \n\
+             (Run `tbs-probe help` for the full guide.)",
+            std::env::current_dir()
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|_| ".".to_string()),
+            std::env::current_exe()
+                .ok()
+                .and_then(|p| p.to_str().map(String::from))
+                .unwrap_or_else(|| "tbs-probe.exe".to_string()),
+        ));
     }
 
     let opts = ProvisionAkOptions {
@@ -242,7 +330,14 @@ fn run_machine_provision() -> Result<(), String> {
     write_ak_blob_file(&out_path, &result.ak_blob)?;
     println!("  key name: {key_name}");
     println!("  wrote blob: {out_path}");
-    println!("  PASS  machine AK provisioned (run quote-blob as standard user next)");
+    println!("  PASS  machine AK provisioned");
+    println!();
+    println!("  NEXT — switch to standard (non-admin) PowerShell and run:");
+    let exe = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.to_str().map(String::from))
+        .unwrap_or_else(|| "tbs-probe.exe".to_string());
+    println!("    {exe} quote-blob --in {out_path}");
     Ok(())
 }
 

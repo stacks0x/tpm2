@@ -37,13 +37,26 @@ On Linux, your user needs read/write on `/dev/tpmrm0` (typically the `tss` group
 
 ## Windows probe (direct TBS validation)
 
-Non-elevated PowerShell on Windows 11:
+Build once:
 
 ```powershell
-cargo run --bin tbs-probe -- all
+cargo build --no-default-features --features probe-bin --bin tbs-probe
 ```
 
-See [spike/README.md](./spike/README.md) for probe details and RC discipline.
+**Standard PowerShell (no admin)** — validates the runtime path (quote, provision, etc.):
+
+```powershell
+.\target\debug\tbs-probe.exe all
+```
+
+Activate is skipped when not elevated; that is expected. Full step-by-step guide
+(including optional fleet machine-key spike):
+
+```powershell
+.\target\debug\tbs-probe.exe help
+```
+
+See [spike/README.md](./spike/README.md) for RC discipline.
 
 ## License
 

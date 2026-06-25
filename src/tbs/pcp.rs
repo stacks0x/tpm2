@@ -248,9 +248,10 @@ fn ncrypt_err(context: &str) -> impl Fn(windows::core::Error) -> TpmOpError + us
 }
 
 fn is_key_not_found(err: &windows::core::Error) -> bool {
-    const NTE_NOT_FOUND: i32 = 0x80090011;
-    const NTE_BAD_KEYSET: i32 = 0x80090016;
-    err.code().0 as i32 == NTE_NOT_FOUND || err.code().0 as i32 == NTE_BAD_KEYSET
+    const NTE_NOT_FOUND: u32 = 0x80090011;
+    const NTE_BAD_KEYSET: u32 = 0x80090016;
+    let code = err.code().0 as u32;
+    code == NTE_NOT_FOUND || code == NTE_BAD_KEYSET
 }
 
 fn set_u32_property(key: NCRYPT_KEY_HANDLE, name: PCWSTR, value: u32) -> TpmResult<()> {

@@ -459,9 +459,60 @@ pub fn is_process_elevated() -> bool {
     unsafe { windows::Win32::UI::Shell::IsUserAnAdmin().as_bool() }
 }
 
-/// True when running as NT AUTHORITY\\SYSTEM (e.g. PsExec -s). Fleet enrollment context.
+/// True when the process token is NT AUTHORITY\\SYSTEM (Intune/SCCM/GPO enrollment context).
 pub fn is_running_as_system() -> bool {
-    std::env::var("USERNAME")
-        .map(|u| u.eq_ignore_ascii_case("SYSTEM"))
-        .unwrap_or(false)
+    use windows::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows::Win32::Security::Authorization::{IsWellKnownSid, WinLocalSystemSid};
+    use windows::Win32::Security::{GetTokenInformation, TokenUser, TOKEN_QUERY, TOKEN_USER};
+    use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+
+    unsafe {
+        let mut token = HANDLE::default();
+        if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token).is_err() {
+            return false;
+        }
+        struct TokenGuard(HANDLE);
+        impl Drop for TokenGuard {
+            fn drop(&mut self) {
+                unsafe {
+                    let _ = CloseHandle(self.0);
+                }
+            }
+        }
+        let _guard = TokenGuard(token);
+
+        let mut len = 0u32;
+        let _ = GetTokenInformation(token, TokenUser, None, 0, &mut len);
+        if len == 0 {
+            return false;
+        }
+        let mut buf = vec![0u8; len as usize];
+        if GetTokenInformation(
+            token,
+            TokenUser,
+            Some(buf.as_mut_ptr().cast()),
+            len,
+            &mut len,
+        )
+        .is_err()
+        {
+            return false;
+        }
+        let tu = &*(buf.as_ptr() as *const TOKEN_USER);
+        if tu.User.Sid.is_null() {
+            return false;
+        }
+        IsWellKnownSid(tu.User.Sid, WinLocalSystemSid).as_bool()
+    }
+}
+
+/// Human-readable security context for probe logs.
+pub fn provision_context_label() -> &'static str {
+    if is_running_as_system() {
+        "SYSTEM"
+    } else if is_process_elevated() {
+        "Administrator (elevated)"
+    } else {
+        "standard user"
+    }
 }

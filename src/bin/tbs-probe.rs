@@ -79,49 +79,62 @@ BUILD (once, any shell):
   cargo build --no-default-features --features probe-bin --bin tbs-probe
 
 ────────────────────────────────────────────────────────────────────
-1. RUNTIME PATH (standard PowerShell — no admin)
+1. RUNTIME PATH (standard PowerShell — no admin)  [required]
 ────────────────────────────────────────────────────────────────────
-This is what a locked-down desktop app does day-to-day: quote only.
-
   {exe} all
 
-You already passed this if you see "tbs-probe: all checks passed".
-Activate is intentionally SKIPped here (PCP requires admin at enroll time).
+Proves quote/provision work unprivileged. Activate is SKIPped (enrollment-only).
 
 ────────────────────────────────────────────────────────────────────
-2. OPTIONAL — fleet cross-user spike (machine-scoped AK)
+2. CROSS-USER QUOTE (standard user quotes machine AK)  [required]
 ────────────────────────────────────────────────────────────────────
-Tests whether a machine key created elevated can be quoted by a
-standard user. Only needed before shipping fleet enrollment.
+STEP B always runs in standard PowerShell:
 
-STEP A — Administrator PowerShell (Start menu → PowerShell → Run as administrator):
-  cd C:\projects
-  {exe} pcp-capabilities
-  {exe} machine-provision --key-name YOUR-KEY-NAME --out ak.blob
+  {exe} quote-blob --in C:\ProgramData\node-tpm2-spike\ak.blob
 
-  (Replace YOUR-KEY-NAME with your product key name, e.g. hardproof-device-ak.
-   No PsExec required — Admin PowerShell is enough for this VM spike.)
+STEP A — provision the machine key. Two contexts matter:
 
-STEP B — back in standard PowerShell (same machine, this window):
-  cd C:\projects
-  {exe} quote-blob --in ak.blob
+  (a) Admin spike — strong evidence, NOT production context
+      Administrator PowerShell:
+        {exe} machine-provision --key-name YOUR-KEY-NAME --out ak.blob
+      pcp-capabilities must show: running as SYSTEM: false
 
-PASS on step B = standard user can quote the machine AK.
+  (b) SYSTEM spike — REQUIRED before calling the foundation complete
+      Production enrollment (Intune/SCCM/GPO) runs as SYSTEM, not Admin.
+      Re-run STEP A as SYSTEM, then STEP B again as standard user.
+
+      Built-in Windows (Admin PowerShell, no PsExec install):
+
+        $exe = "{exe}"
+        $dir = "C:\ProgramData\node-tpm2-spike"
+        New-Item -ItemType Directory -Force -Path $dir | Out-Null
+        $log = "$dir\provision.log"
+        $blob = "$dir\ak.blob"
+        schtasks /Delete /TN "node-tpm2-system-spike" /F 2>$null
+        schtasks /Create /TN "node-tpm2-system-spike" `
+          /TR "cmd /c `"$exe`" machine-provision --key-name YOUR-KEY-NAME --out `"$blob`" > `"$log`" 2>&1" `
+          /SC ONCE /ST 23:59 /SD 01/01/2030 /RU SYSTEM /RL HIGHEST /F
+        schtasks /Run /TN "node-tpm2-system-spike"
+        Start-Sleep -Seconds 8
+        Get-Content $log
+        # log must show "provision context: SYSTEM" and PASS
+
+      Then standard PowerShell:
+        {exe} quote-blob --in C:\ProgramData\node-tpm2-spike\ak.blob
+
+      Alternative: PsExec -s -i (Sysinternals) if you already have it.
 
 ────────────────────────────────────────────────────────────────────
-3. OPTIONAL — full activate roundtrip (enrollment proof)
+3. ACTIVATE ROUNDTRIP (elevated admin or SYSTEM)  [optional probe]
 ────────────────────────────────────────────────────────────────────
-Run in Administrator PowerShell only:
-
   {exe} activate-credential
 
 ────────────────────────────────────────────────────────────────────
-Notes
+Before production (outside this library)
 ────────────────────────────────────────────────────────────────────
-- PsExec / SYSTEM is NOT required for local VM testing. Intune/SCCM
-  deploy as SYSTEM in production; simulate that later if Admin vs SYSTEM
-  behaves differently (scheduled task, PsExec -s — optional).
-- Env vars: TPM2_KEY_NAME, TPM2_AK_BLOB_PATH override defaults.
+- Validate SYSTEM provision on one real firmware TPM, domain-joined corp image
+  (VM/swtpm is not a nurse's station)
+- hardproof-enroll tooling is product-specific, not node-tpm2
 "#
     );
 }
@@ -276,6 +289,10 @@ fn run_pcp_capabilities() -> Result<(), String> {
         caps.security_descr_supported
     );
     println!(
+        "  provision context: {}",
+        node_tpm2::tbs::pcp::provision_context_label()
+    );
+    println!(
         "  process elevated: {}",
         node_tpm2::tbs::pcp::is_process_elevated()
     );
@@ -293,6 +310,16 @@ fn run_pcp_capabilities() -> Result<(), String> {
 #[cfg(windows)]
 fn run_machine_provision() -> Result<(), String> {
     println!("== machine-provision (PCP2 machine-scoped AK) ==");
+    println!(
+        "  provision context: {}",
+        node_tpm2::tbs::pcp::provision_context_label()
+    );
+    if node_tpm2::tbs::pcp::is_process_elevated() && !node_tpm2::tbs::pcp::is_running_as_system() {
+        println!(
+            "  NOTE  Admin context — production enrollment runs as SYSTEM; \
+             see `tbs-probe help` section 2(b)"
+        );
+    }
 
     let key_name = flag_value("--key-name")
         .or_else(|| std::env::var("TPM2_KEY_NAME").ok())

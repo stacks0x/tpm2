@@ -8,9 +8,9 @@
 use windows::core::{w, PCWSTR};
 use windows::Win32::Security::Authorization::ConvertStringSecurityDescriptorToSecurityDescriptorW;
 use windows::Win32::Security::Cryptography::{
-    NCryptCreatePersistedKey, NCryptFinalizeKey, NCryptFreeObject, NCryptGetProperty,
-    NCryptOpenKey, NCryptOpenStorageProvider, NCryptSetProperty, CERT_KEY_SPEC, NCRYPT_FLAGS,
-    NCRYPT_KEY_HANDLE, NCRYPT_PROV_HANDLE,
+    NCryptCreatePersistedKey, NCryptDeleteKey, NCryptFinalizeKey, NCryptFreeObject,
+    NCryptGetProperty, NCryptOpenKey, NCryptOpenStorageProvider, NCryptSetProperty, CERT_KEY_SPEC,
+    NCRYPT_FLAGS, NCRYPT_KEY_HANDLE, NCRYPT_PROV_HANDLE,
 };
 use windows::Win32::Security::{
     GetSecurityDescriptorLength, DACL_SECURITY_INFORMATION, OBJECT_SECURITY_INFORMATION,
@@ -84,6 +84,10 @@ impl PcpProvider {
             ));
         }
 
+        if opts.overwrite {
+            let _ = self.delete_persisted_key_if_exists(key_name, opts.scope);
+        }
+
         let mut key = NCRYPT_KEY_HANDLE::default();
         let name = wide(key_name);
         let create_flags = ncrypt_key_flags(opts.scope, opts.overwrite);
@@ -108,6 +112,30 @@ impl PcpProvider {
             NCryptFinalizeKey(key, NCRYPT_NO_FLAGS).map_err(ncrypt_err("NCryptFinalizeKey"))?;
         }
         Ok(PcpKey { handle: key })
+    }
+
+    /// PCP often ignores NCRYPT_OVERWRITE_KEY_FLAG; delete explicitly when re-provisioning.
+    fn delete_persisted_key_if_exists(&self, key_name: &str, scope: PcpKeyScope) -> TpmResult<()> {
+        let name = wide(key_name);
+        let open_flags = ncrypt_key_flags(scope, false);
+        let mut key = NCRYPT_KEY_HANDLE::default();
+        unsafe {
+            match NCryptOpenKey(
+                self.handle,
+                &mut key,
+                PCWSTR(name.as_ptr()),
+                NCRYPT_LEGACY_KEY_SPEC,
+                open_flags,
+            ) {
+                Ok(()) => {
+                    NCryptDeleteKey(key, 0).map_err(ncrypt_err("NCryptDeleteKey"))?;
+                    let _ = NCryptFreeObject(key);
+                }
+                Err(e) if is_key_not_found(&e) => {}
+                Err(e) => return Err(ncrypt_err("NCryptOpenKey (delete probe)")(e)),
+            }
+        }
+        Ok(())
     }
 
     fn open_key(&self, key_name: &str, scope: PcpKeyScope) -> TpmResult<PcpKey> {
@@ -217,6 +245,12 @@ fn wide(s: &str) -> Vec<u16> {
 fn ncrypt_err(context: &str) -> impl Fn(windows::core::Error) -> TpmOpError + use<'_> {
     let context = context.to_string();
     move |e: windows::core::Error| TpmOpError::other(format!("{context}: {e}"))
+}
+
+fn is_key_not_found(err: &windows::core::Error) -> bool {
+    const NTE_NOT_FOUND: i32 = 0x80090011;
+    const NTE_BAD_KEYSET: i32 = 0x80090016;
+    err.code().0 as i32 == NTE_NOT_FOUND || err.code().0 as i32 == NTE_BAD_KEYSET
 }
 
 fn set_u32_property(key: NCRYPT_KEY_HANDLE, name: PCWSTR, value: u32) -> TpmResult<()> {
@@ -462,8 +496,9 @@ pub fn is_process_elevated() -> bool {
 /// True when the process token is NT AUTHORITY\\SYSTEM (Intune/SCCM/GPO enrollment context).
 pub fn is_running_as_system() -> bool {
     use windows::Win32::Foundation::{CloseHandle, HANDLE};
-    use windows::Win32::Security::Authorization::{IsWellKnownSid, WinLocalSystemSid};
-    use windows::Win32::Security::{GetTokenInformation, TokenUser, TOKEN_QUERY, TOKEN_USER};
+    use windows::Win32::Security::{
+        GetTokenInformation, IsWellKnownSid, TokenUser, WinLocalSystemSid, TOKEN_QUERY, TOKEN_USER,
+    };
     use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
     unsafe {
@@ -499,7 +534,7 @@ pub fn is_running_as_system() -> bool {
             return false;
         }
         let tu = &*(buf.as_ptr() as *const TOKEN_USER);
-        if tu.User.Sid.is_null() {
+        if tu.User.Sid.0.is_null() {
             return false;
         }
         IsWellKnownSid(tu.User.Sid, WinLocalSystemSid).as_bool()

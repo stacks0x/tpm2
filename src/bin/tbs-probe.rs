@@ -105,6 +105,9 @@ STEP A — provision the machine key. Two contexts matter:
 
       Built-in Windows (Admin PowerShell, no PsExec install):
 
+        # Rebuild MUST succeed before running the task (stale exe = wrong results).
+        cargo build --no-default-features --features probe-bin --bin tbs-probe
+
         $exe = "{exe}"
         $dir = "C:\ProgramData\node-tpm2-spike"
         New-Item -ItemType Directory -Force -Path $dir | Out-Null

@@ -1,55 +1,71 @@
 #!/usr/bin/env node
 /**
- * Build all native targets and publish node-tpm2 + platform packages with dist-tag beta.
- * Requires: npm login (or ~/.npmrc auth token), rust, node 20+.
- * Run from repo root: node scripts/publish-beta.mjs
+ * Build all native targets and publish node-tpm2 + platform packages.
+ * Prerelease versions (e.g. 0.0.4-beta.0) publish with dist-tag `beta`.
+ *
+ * Auth: use an npm **Automation** token in ~/.npmrc (non-interactive):
+ *   //registry.npmjs.org/:_authToken=npm_...
+ * Session login (`npm login`) often triggers browser 2FA on publish and fails in scripts.
+ *
+ * Run: npm run publish:beta
  */
-import { execSync } from 'node:child_process';
-import { readFileSync, readdirSync } from 'node:fs';
+import { cpSync, mkdirSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { execSync } from 'node:child_process';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const version = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).version;
 const distTag = version.includes('-') ? 'beta' : 'latest';
+
+const TARGETS = [
+  ['x86_64-pc-windows-msvc', 'node-tpm2.win32-x64-msvc.node', false],
+  ['aarch64-pc-windows-msvc', 'node-tpm2.win32-arm64-msvc.node', false],
+  ['x86_64-unknown-linux-gnu', 'node-tpm2.linux-x64-gnu.node', false],
+  ['x86_64-unknown-linux-musl', 'node-tpm2.linux-x64-musl.node', true],
+  ['aarch64-unknown-linux-gnu', 'node-tpm2.linux-arm64-gnu.node', false],
+  ['aarch64-unknown-linux-musl', 'node-tpm2.linux-arm64-musl.node', true],
+  ['aarch64-apple-darwin', 'node-tpm2.darwin-arm64.node', false],
+];
 
 function run(cmd, opts = {}) {
   console.log(`\n> ${cmd}`);
   execSync(cmd, { stdio: 'inherit', cwd: root, ...opts });
 }
 
+function stageArtifact(target, nodeFile) {
+  const src = join(root, nodeFile);
+  const destDir = join(root, 'artifacts', `bindings-${target}`);
+  mkdirSync(destDir, { recursive: true });
+  cpSync(src, join(destDir, nodeFile));
+  console.log(`  staged ${nodeFile} -> artifacts/bindings-${target}/`);
+}
+
 try {
   run('npm whoami');
 } catch {
-  console.error('\nNot logged in to npm. Run: npm login');
-  console.error('Or set //registry.npmjs.org/:_authToken=... in ~/.npmrc');
+  console.error('\nNot logged in to npm.');
+  console.error('Add an Automation token to ~/.npmrc:');
+  console.error('  //registry.npmjs.org/:_authToken=npm_...');
   process.exit(1);
 }
 
 console.log(`\nPublishing node-tpm2@${version} (dist-tag: ${distTag})`);
 
-const targets = [
-  'x86_64-pc-windows-msvc',
-  'aarch64-pc-windows-msvc',
-  'x86_64-unknown-linux-gnu',
-  'x86_64-unknown-linux-musl',
-  'aarch64-unknown-linux-gnu',
-  'aarch64-unknown-linux-musl',
-  'aarch64-apple-darwin',
-];
+rmSync(join(root, 'artifacts'), { recursive: true, force: true });
 
-for (const target of targets) {
-  const musl = target.includes('musl');
+for (const [target, nodeFile, musl] of TARGETS) {
   const cmd = musl
     ? `npm run build -- --target ${target} -x`
     : `npm run build -- --target ${target}`;
   try {
     run(cmd);
-  } catch (e) {
-    console.error(`\nBuild failed for ${target}. Install cross tools if needed.`);
-    console.error('Windows on Linux: cargo install cargo-xwin');
-    console.error('musl: zig + cargo-zigbuild (see .github/workflows/release.yml)');
-    throw e;
+    stageArtifact(target, nodeFile);
+  } catch {
+    console.error(`\nBuild failed for ${target}.`);
+    console.error('Windows cross-compile: rustup target add ... && cargo install cargo-xwin');
+    console.error('musl: install zig + cargo-zigbuild (see .github/workflows/release.yml)');
+    process.exit(1);
   }
 }
 
@@ -60,7 +76,21 @@ run('npm run prepublishOnly');
 
 for (const dir of readdirSync(join(root, 'npm'))) {
   const pkgDir = join(root, 'npm', dir);
-  run(`npm publish --access public --tag ${distTag}`, { cwd: pkgDir });
+  try {
+    run(`npm publish --access public --tag ${distTag}`, { cwd: pkgDir });
+  } catch {
+    console.error(`
+Publish failed (often npm browser 2FA on session login).
+
+Fix: create an Automation token at https://www.npmjs.com/settings/~/tokens
+Put in ~/.npmrc:
+  //registry.npmjs.org/:_authToken=npm_YOUR_TOKEN
+
+Then re-run: npm run publish:beta
+(Platform packages already published can be skipped manually if needed.)
+`);
+    process.exit(1);
+  }
 }
 
 run(`npm publish --access public --tag ${distTag}`);

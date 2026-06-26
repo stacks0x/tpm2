@@ -93,10 +93,11 @@ for (const [target, nodeFile, cross] of TARGETS) {
 
 run('npm run create-npm-dirs');
 run('npm run artifacts');
-run('npm run patch-windows-npm');
 run('npm run prepublishOnly');
+run('npm run patch-windows-npm');
 
 for (const dir of readdirSync(join(root, 'npm'))) {
+  if (dir === 'darwin-arm64') continue;
   const nodeFiles = readdirSync(join(root, 'npm', dir)).filter((f) => f.endsWith('.node'));
   for (const nodeFile of nodeFiles) {
     assertBinaryExports(join(root, 'npm', dir, nodeFile));
@@ -105,6 +106,10 @@ for (const dir of readdirSync(join(root, 'npm'))) {
 
 for (const dir of readdirSync(join(root, 'npm'))) {
   const pkgDir = join(root, 'npm', dir);
+  if (dir === 'darwin-arm64') {
+    console.log('\nSkipping darwin-arm64 (build on macOS CI, publish separately).');
+    continue;
+  }
   try {
     run(`npm publish --access public --tag ${distTag}`, { cwd: pkgDir });
   } catch {

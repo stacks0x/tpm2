@@ -1,16 +1,31 @@
 export declare class TpmError extends Error {
-  code: string;
+  code: TpmErrorCode;
   suggestion?: string;
   tpmRc?: number;
   hresult?: number;
   constructor(
-    code: string,
+    code: TpmErrorCode,
     message: string,
     suggestion?: string,
     tpmRc?: number,
     hresult?: number,
   );
 }
+
+/** Stable error codes — match Rust `src/tbs/codes.rs`. Semver after `latest`. */
+export declare type TpmErrorCode =
+  | 'TPM_UNAVAILABLE'
+  | 'ACCESS_DENIED'
+  | 'COMMAND_BLOCKED'
+  | 'REQUIRES_ELEVATION'
+  | 'NOT_SUPPORTED'
+  | 'INVALID_ARGUMENT'
+  | 'KEY_NOT_FOUND'
+  | 'ALREADY_EXISTS'
+  | 'MARSHALLING_ERROR'
+  | 'TRANSPORT_ERROR'
+  | 'AUTH_FAILED'
+  | 'TPM_RC';
 
 export declare type AkBlob = {
   public: Buffer;

@@ -1,7 +1,7 @@
 {
   "name": "node-tpm2",
   "version": "0.0.4-beta.2",
-  "description": "Native TPM 2.0 for Node. Zero tooling, no admin. Windows (TBS) and Linux (/dev/tpmrm0). Pre-release.",
+  "description": "TPM 2.0 attestation for Node.js — prebuilt native bindings, PCR quotes, and fleet-ready Windows PCP keys. No tpm2-tools.",
   "type": "module",
   "license": "Apache-2.0",
   "author": "Matt <support@hardproof.app>",
@@ -71,6 +71,7 @@
     "create-npm-dirs": "napi create-npm-dirs",
     "patch-windows-npm": "node scripts/patch-windows-npm-packages.mjs",
     "prepublishOnly": "napi prepublish -t npm --skip-optional-publish",
+    "verify:package": "node scripts/verify-package-tarball.mjs",
     "publish:beta": "node scripts/publish-beta.mjs"
   },
   "devDependencies": {
@@ -83,8 +84,6 @@
     "node-tpm2-linux-arm64-gnu": "0.0.4-beta.2",
     "node-tpm2-linux-x64-musl": "0.0.4-beta.2",
     "node-tpm2-linux-arm64-musl": "0.0.4-beta.2",
-    "node-tpm2-darwin-arm64": "0.0.4-beta.2",
-    "node-tpm2-win32-x64-msvc": "0.0.4-beta.2",
-    "node-tpm2-win32-arm64-msvc": "0.0.4-beta.2"
+    "node-tpm2-darwin-arm64": "0.0.4-beta.2"
   }
 }

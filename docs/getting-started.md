@@ -1,11 +1,6 @@
 # Getting started
 
-node-tpm2 talks to the TPM 2.0 through OS-native paths — no tpm2-tools, no tpm2-tss, and no Rust toolchain at install time.
-
-| Platform | Transport | Attestation key (AK) |
-|----------|-----------|----------------------|
-| Linux | `/dev/tpmrm0` | ECDSA P-256 wrapped TPM2B blob |
-| Windows | TBS + NCrypt PCP | RSA-2048 persisted PCP key (`PCP1` / `PCP2` blob) |
+node-tpm2 exposes TPM 2.0 attestation through a small JavaScript API. Install is a normal npm dependency — prebuilt native binaries, no `tpm2-tools` or Rust toolchain on the target machine.
 
 ## Install
 
@@ -13,26 +8,33 @@ node-tpm2 talks to the TPM 2.0 through OS-native paths — no tpm2-tools, no tpm
 npm install node-tpm2
 ```
 
-Requires Node 20+. npm pulls a prebuilt native binary for your OS/arch from optional platform packages (`node-tpm2-windows-x64-msvc`, `node-tpm2-linux-x64-gnu`, etc.).
+Requires Node 20+. Platform binaries resolve automatically (`node-tpm2-windows-x64-msvc`, `node-tpm2-linux-x64-gnu`, etc.).
 
-## Quick check
+## Check the TPM
 
 ```javascript
 import { Tpm } from 'node-tpm2';
 
-console.log('available', await Tpm.isAvailable());
-console.log('info', await Tpm.info());
+if (!(await Tpm.isAvailable())) {
+  throw new Error('No accessible TPM');
+}
+
+const info = await Tpm.info();
+console.log(info.manufacturer, info.firmwareVersion, info.isVirtual);
 ```
 
-## Provision and quote (development)
+## Provision and quote
 
-Works **without admin** on both Linux and Windows (user-scoped AK on Windows):
+### User-scoped (development and same-user apps)
+
+Works as a **standard user** on Windows and Linux (with `/dev/tpmrm0` access):
 
 ```javascript
 import { Tpm } from 'node-tpm2';
 
 const { akPublicDer, akBlob } = await Tpm.provisionAk();
-console.log('AK SPKI', akPublicDer.length, 'bytes');
+// akPublicDer → register with your verifier
+// akBlob → persist locally (encrypted at rest in your app)
 
 const quote = await Tpm.quote({
   akBlob,
@@ -40,23 +42,36 @@ const quote = await Tpm.quote({
   qualifyingData: Buffer.from('session-nonce-or-challenge'),
   bank: 'sha256',
 });
-console.log('quote', quote.message.length, quote.signature.length);
+// quote.message, quote.signature → send to verifier
 ```
 
-## Windows: machine-scoped AK (cross-user)
-
-For apps where a **privileged installer** creates the key and a **standard user** quotes at runtime, use a machine-scoped key with a stable name. See [windows-pcp.md](./windows-pcp.md).
+### Handle style
 
 ```javascript
-// Run elevated or as SYSTEM (enrollment / install time only)
+const tpm = await Tpm.open();
+const ak = await tpm.attest.provisionAk();
+
+const quote = await ak.quote({
+  pcrSelection: [0, 1, 7],
+  qualifyingData: Buffer.from('challenge'),
+});
+
+const saved = ak.export(); // { public, private } buffers for storage
+```
+
+## Windows: machine-scoped AK (fleet)
+
+When a **privileged installer** creates the key and a **standard user** quotes at runtime:
+
+```javascript
+// Enrollment — Admin or SYSTEM only (once per device)
 const { akBlob } = await Tpm.provisionAk({
   keyName: 'my-app-device-ak',
   scope: 'machine',
   overwrite: true,
 });
-// Persist akBlob (and upload creation attestation to your verifier)
 
-// Runtime — standard user, no admin
+// Runtime — standard user, no elevation
 const quote = await Tpm.quote({
   akBlob,
   pcrSelection: [0, 1, 7],
@@ -64,14 +79,41 @@ const quote = await Tpm.quote({
 });
 ```
 
+See [windows-pcp.md](./windows-pcp.md) for PCP details, DACL behavior, and SYSTEM enrollment.
+
 ## Linux permissions
 
-Your user needs read/write on `/dev/tpmrm0` (commonly the `tss` group):
+Read/write on `/dev/tpmrm0` (commonly membership in the `tss` group):
 
 ```bash
 sudo usermod -aG tss "$USER"
+# log out and back in
 ```
 
 ## Errors
 
-Native failures surface as `TpmError` with `code`, `message`, optional `suggestion`, and `tpmRc` when the TPM returned an RC.
+Native failures throw `TpmError`:
+
+| Field | Meaning |
+|-------|---------|
+| `code` | Stable string (`TPM_UNAVAILABLE`, `REQUIRES_ELEVATION`, `ACCESS_DENIED`, …) |
+| `message` | Human-readable detail |
+| `suggestion` | Optional remediation hint |
+| `tpmRc` | TPM 2.0 return code when applicable |
+| `hresult` | Windows NCrypt HRESULT when applicable |
+
+```javascript
+import { Tpm, TpmError } from 'node-tpm2';
+
+try {
+  await Tpm.provisionAk({ scope: 'machine', keyName: 'x' });
+} catch (err) {
+  if (err instanceof TpmError && err.code === 'REQUIRES_ELEVATION') {
+    // Run enrollment elevated or as SYSTEM
+  }
+}
+```
+
+## What ships in npm
+
+The published package contains the JavaScript API, type definitions, user docs, and the smoke-test example — **not** Rust sources, `tbs-probe`, or spike binaries. Those stay in the git repo for developers.

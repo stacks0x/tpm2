@@ -43,6 +43,10 @@ Requirements:
 
 PCP identity keys are RSA-2048. Quotes use `TPM_ALG_NULL` (key default RSASSA), matching go-attestation. Linux uses explicit ECDSA+SHA256.
 
+## Errors at enrollment time
+
+Machine provisioning from a standard user returns `TpmError` with `code: 'REQUIRES_ELEVATION'` and an NCrypt `hresult`. Runtime quote failures use the same structured error shape (`tpmRc` for TPM, `hresult` for PCP/NCrypt).
+
 ## Validating with `tbs-probe` (Rust, developers only)
 
 The npm module and `tbs-probe` share the same Rust core but are **different artifacts**. Validate Rust with the probe; validate the **npm package** with [examples/smoke-test.mjs](../examples/smoke-test.mjs) on a clean machine.

@@ -9,23 +9,33 @@
  *
  * Run: npm run publish:beta
  */
-import { cpSync, mkdirSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execSync } from 'node:child_process';
+import { homedir } from 'node:os';
+import {
+  assertMainTarball,
+  assertPlatformTarball,
+} from './verify-package-tarball.mjs';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const version = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).version;
 const distTag = version.includes('-') ? 'beta' : 'latest';
+
+// Prepend ~/zig when present (musl + aarch64-linux-gnu cross-builds need it).
+const zigBin = join(homedir(), 'zig');
+if (existsSync(join(zigBin, 'zig')) && !process.env.PATH?.split(':').includes(zigBin)) {
+  process.env.PATH = `${zigBin}:${process.env.PATH ?? ''}`;
+}
 
 const TARGETS = [
   ['x86_64-pc-windows-msvc', 'node-tpm2.win32-x64-msvc.node', 'xwin'],
   ['aarch64-pc-windows-msvc', 'node-tpm2.win32-arm64-msvc.node', 'xwin'],
   ['x86_64-unknown-linux-gnu', 'node-tpm2.linux-x64-gnu.node', null],
   ['x86_64-unknown-linux-musl', 'node-tpm2.linux-x64-musl.node', 'zig'],
-  ['aarch64-unknown-linux-gnu', 'node-tpm2.linux-arm64-gnu.node', null],
+  ['aarch64-unknown-linux-gnu', 'node-tpm2.linux-arm64-gnu.node', 'zig'],
   ['aarch64-unknown-linux-musl', 'node-tpm2.linux-arm64-musl.node', 'zig'],
-  ['aarch64-apple-darwin', 'node-tpm2.darwin-arm64.node', null],
 ];
 
 function run(cmd, opts = {}) {
@@ -39,6 +49,7 @@ const REQUIRED_EXPORTS = [
   'pcrRead',
   'getFixedProperties',
   'isAvailable',
+  'activateCredential',
 ];
 
 function assertBinaryExports(nodePath) {
@@ -85,8 +96,13 @@ for (const [target, nodeFile, cross] of TARGETS) {
     stageArtifact(target, nodeFile);
   } catch {
     console.error(`\nBuild failed for ${target}.`);
-    console.error('Windows cross-compile: rustup target add ... && cargo install cargo-xwin');
-    console.error('musl: install zig + cargo-zigbuild (see .github/workflows/release.yml)');
+    if (cross === 'xwin') {
+      console.error('Windows: rustup target add <triple> && cargo install cargo-xwin');
+    }
+    if (cross === 'zig') {
+      console.error('Cross Linux: install zig (https://ziglang.org) + cargo install cargo-zigbuild');
+      console.error('  e.g. export PATH="$HOME/zig:$PATH"');
+    }
     process.exit(1);
   }
 }
@@ -102,7 +118,10 @@ for (const dir of readdirSync(join(root, 'npm'))) {
   for (const nodeFile of nodeFiles) {
     assertBinaryExports(join(root, 'npm', dir, nodeFile));
   }
+  assertPlatformTarball(dir, { requireNode: true });
 }
+
+assertMainTarball();
 
 for (const dir of readdirSync(join(root, 'npm'))) {
   const pkgDir = join(root, 'npm', dir);

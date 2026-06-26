@@ -57,11 +57,15 @@ jobs:
       - run: npm ci
       - name: Build native addon
         run: |
-          if [ "${{ matrix.musl }}" = "true" ]; then
-            npm run build -- --target ${{ matrix.target }} -x
-          else
-            npm run build -- --target ${{ matrix.target }}
+          CROSS=""
+          if [ "${{ matrix.musl }}" = "true" ] || [ "${{ matrix.target }}" = "x86_64-pc-windows-msvc" ] || [ "${{ matrix.target }}" = "aarch64-pc-windows-msvc" ]; then
+            if [ "${{ runner.os }}" != "Windows" ]; then
+              CROSS="-x"
+            fi
           fi
+          npx napi build --platform --release --target ${{ matrix.target }} $CROSS \
+            --js native.cjs --dts native.d.ts
+          node scripts/patch-windows-npm-packages.mjs
         shell: bash
       - uses: actions/upload-artifact@v4
         with:

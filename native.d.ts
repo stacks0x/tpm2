@@ -26,15 +26,19 @@ export declare function isAvailable(): Promise<boolean>
 
 export declare function pcrRead(selection: Array<number>, bank?: string | undefined | null): Promise<Record<string, string>>
 
-export declare function provisionAk(opts?: {
-  keyName?: string
-  scope?: 'user' | 'machine'
-  overwrite?: boolean
-}): Promise<ProvisionAkJs>
+export declare function provisionAk(opts?: ProvisionAkOptionsJs | undefined | null): Promise<ProvisionAkJs>
 
 export interface ProvisionAkJs {
   akPublicDer: Buffer
   akBlob: AkBlobJs
+}
+
+export interface ProvisionAkOptionsJs {
+  keyName?: string
+  /** Windows only: `"user"` (default) or `"machine"`. */
+  scope?: string
+  /** Windows only: replace existing persisted key of the same name. */
+  overwrite?: boolean
 }
 
 export declare function quote(opts: QuoteOptionsJs): Promise<QuoteJs>

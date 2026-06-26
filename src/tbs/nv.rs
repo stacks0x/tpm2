@@ -19,7 +19,7 @@ pub fn read_ek_certificate() -> TpmResult<Option<Vec<u8>>> {
         match read_nv_index(index) {
             Ok(Some(data)) if !data.is_empty() => return Ok(Some(data)),
             Ok(_) => continue,
-            Err(e) if e.code == "TPM_RC" => continue,
+            Err(e) if e.code() == crate::tbs::codes::TPM_RC => continue,
             Err(e) => return Err(e),
         }
     }
@@ -40,7 +40,7 @@ fn nv_index_data_size(index: u32) -> TpmResult<Option<u16>> {
     let resp = submit_tpm_command(&cmd).map_err(TpmOpError::transport)?;
     let rc = tpm_rc_from_response(&resp).ok_or_else(|| TpmOpError::other("NV_ReadPublic: short response"))?;
     if rc != 0 {
-        return Err(TpmOpError::tpm_rc(rc, "NV_ReadPublic"));
+        return Err(TpmOpError::from_tpm_rc(rc, "NV_ReadPublic"));
     }
 
     let mut parser = ResponseParser::after_rc(&resp)?;

@@ -22,6 +22,7 @@ use crate::tbs::ak_blob::{
 };
 use crate::tbs::error::{TpmOpError, TpmResult};
 use crate::tbs::keys::{AkBlob, ProvisionAkOptions, ProvisionAkResult};
+use crate::tbs::ncrypt::{classify_ncrypt, NcryptOp};
 use crate::tbs::pcr::PcrBank;
 use crate::tbs::quote::{pcp_rsa_quote_scheme, quote_with_submit, rsassa_sha256_scheme, QuoteResult};
 use crate::tbs::read_public::public_wire_to_spki_der;
@@ -36,8 +37,8 @@ const NCRYPT_NO_FLAGS: NCRYPT_FLAGS = NCRYPT_FLAGS(0);
 const NCRYPT_NO_SECURITY_FLAGS: OBJECT_SECURITY_INFORMATION = OBJECT_SECURITY_INFORMATION(0);
 const NCRYPT_LEGACY_KEY_SPEC: CERT_KEY_SPEC = CERT_KEY_SPEC(0);
 
-/// DACL: SYSTEM/Administrators full; Built-in Users read + sign/use for NCrypt key ops.
-const MACHINE_KEY_SDDL: &str = "D:(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGWGX;;;BU)";
+/// DACL: SYSTEM/Administrators full; Built-in Users read + execute (sign/use), no write.
+const MACHINE_KEY_SDDL: &str = "D:(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGX;;;BU)";
 
 struct PcpProvider {
     handle: NCRYPT_PROV_HANDLE,
@@ -52,7 +53,7 @@ impl PcpProvider {
                 w!("Microsoft Platform Crypto Provider"),
                 0,
             )
-            .map_err(ncrypt_err("NCryptOpenStorageProvider"))?;
+            .map_err(map_ncrypt("NCryptOpenStorageProvider", NcryptOp::General))?;
         }
         Ok(Self { handle })
     }
@@ -71,18 +72,28 @@ impl PcpProvider {
                 &mut cb,
                 NCRYPT_NO_SECURITY_FLAGS,
             )
-            .map_err(ncrypt_err("NCryptGetProperty(Security Descr Support)"))?;
+            .map_err(map_ncrypt(
+                "NCryptGetProperty(Security Descr Support)",
+                NcryptOp::General,
+            ))?;
         }
         Ok(value != 0)
     }
 
     fn create_identity_ak(&self, key_name: &str, opts: &ProvisionAkOptions) -> TpmResult<PcpKey> {
         if opts.scope == PcpKeyScope::Machine && !self.security_descr_supported()? {
-            return Err(TpmOpError::other(
+            return Err(TpmOpError::not_supported(
                 "PCP provider does not advertise Security Descr Support; \
                  machine-scoped AK requires DACL (fleet enrollment blocked)",
+                None,
             ));
         }
+
+        let ncrypt_op = if opts.scope == PcpKeyScope::Machine {
+            NcryptOp::MachineProvision
+        } else {
+            NcryptOp::General
+        };
 
         if opts.overwrite {
             let _ = self.delete_persisted_key_if_exists(key_name, opts.scope);
@@ -100,7 +111,7 @@ impl PcpProvider {
                 NCRYPT_LEGACY_KEY_SPEC,
                 create_flags,
             )
-            .map_err(ncrypt_err("NCryptCreatePersistedKey"))?;
+            .map_err(map_ncrypt("NCryptCreatePersistedKey", ncrypt_op))?;
 
             set_u32_property(key, w!("Length"), RSA_KEY_BITS)?;
             set_u32_property(key, w!("PCP_KEY_USAGE_POLICY"), KEY_USAGE_POLICY_IDENTITY)?;
@@ -109,7 +120,8 @@ impl PcpProvider {
                 set_machine_key_dacl(key)?;
             }
 
-            NCryptFinalizeKey(key, NCRYPT_NO_FLAGS).map_err(ncrypt_err("NCryptFinalizeKey"))?;
+            NCryptFinalizeKey(key, NCRYPT_NO_FLAGS)
+                .map_err(map_ncrypt("NCryptFinalizeKey", ncrypt_op))?;
         }
         Ok(PcpKey { handle: key })
     }
@@ -128,11 +140,13 @@ impl PcpProvider {
                 open_flags,
             ) {
                 Ok(()) => {
-                    NCryptDeleteKey(key, 0).map_err(ncrypt_err("NCryptDeleteKey"))?;
+                    NCryptDeleteKey(key, 0).map_err(map_ncrypt("NCryptDeleteKey", NcryptOp::General))?;
                     let _ = NCryptFreeObject(key);
                 }
                 Err(e) if is_key_not_found(&e) => {}
-                Err(e) => return Err(ncrypt_err("NCryptOpenKey (delete probe)")(e)),
+                Err(e) => {
+                    return Err(map_ncrypt("NCryptOpenKey (delete probe)", NcryptOp::General)(e))
+                }
             }
         }
         Ok(())
@@ -150,7 +164,7 @@ impl PcpProvider {
                 NCRYPT_LEGACY_KEY_SPEC,
                 open_flags,
             )
-            .map_err(ncrypt_err("NCryptOpenKey"))?;
+            .map_err(map_ncrypt("NCryptOpenKey", NcryptOp::General))?;
         }
         Ok(PcpKey { handle: key })
     }
@@ -175,12 +189,14 @@ struct PcpKey {
 
 impl PcpKey {
     fn id_binding(&self) -> TpmResult<PcpAkMetadata> {
-        let buf = get_buffer_property_key(self.handle, w!("PCP_TPM12_IDBINDING"))?;
+        let buf =
+            get_buffer_property_key(self.handle, w!("PCP_TPM12_IDBINDING"), NcryptOp::General)?;
         decode_id_binding(&buf)
     }
 
     fn tpm_handle(&self) -> TpmResult<u32> {
-        let buf = get_buffer_property_key(self.handle, w!("PCP_PLATFORMHANDLE"))?;
+        let buf =
+            get_buffer_property_key(self.handle, w!("PCP_PLATFORMHANDLE"), NcryptOp::General)?;
         parse_tpm_object_handle(&buf)
     }
 
@@ -196,9 +212,16 @@ impl PcpKey {
                 &activation,
                 NCRYPT_NO_FLAGS,
             )
-            .map_err(ncrypt_err("NCryptSetProperty(PCP_TPM12_IDACTIVATION)"))?;
+            .map_err(map_ncrypt(
+                "NCryptSetProperty(PCP_TPM12_IDACTIVATION)",
+                NcryptOp::ActivateCredential,
+            ))?;
         }
-        let buf = get_buffer_property_key(self.handle, w!("PCP_TPM12_IDACTIVATION"))?;
+        let buf = get_buffer_property_key(
+            self.handle,
+            w!("PCP_TPM12_IDACTIVATION"),
+            NcryptOp::ActivateCredential,
+        )?;
         Ok(unwrap_tpm2b_response(&buf))
     }
 }
@@ -227,6 +250,24 @@ fn default_key_name() -> String {
     format!("node-tpm2-ak-{}", hex_encode(&nonce))
 }
 
+fn validate_provision_options(opts: &ProvisionAkOptions) -> TpmResult<()> {
+    if opts.scope != PcpKeyScope::Machine {
+        return Ok(());
+    }
+    let name = opts.key_name.as_deref().unwrap_or("").trim();
+    if name.is_empty() {
+        return Err(TpmOpError::invalid_argument(
+            "machine-scoped provisionAk requires a non-empty keyName",
+        ));
+    }
+    if name.starts_with("node-tpm2-ak-") {
+        return Err(TpmOpError::invalid_argument(
+            "machine scope cannot use the auto-generated dev key name; set an explicit fleet keyName",
+        ));
+    }
+    Ok(())
+}
+
 fn resolve_key_name(opts: &ProvisionAkOptions) -> String {
     opts.key_name
         .clone()
@@ -242,14 +283,17 @@ fn wide(s: &str) -> Vec<u16> {
     std::ffi::OsStr::new(s).encode_wide().chain(Some(0)).collect()
 }
 
-fn ncrypt_err(context: &str) -> impl Fn(windows::core::Error) -> TpmOpError + use<'_> {
+fn map_ncrypt(context: &str, op: NcryptOp) -> impl Fn(windows::core::Error) -> TpmOpError + use<'_> {
     let context = context.to_string();
-    move |e: windows::core::Error| TpmOpError::other(format!("{context}: {e}"))
+    move |e: windows::core::Error| {
+        let hresult = e.code().0 as u32;
+        classify_ncrypt(hresult, &context, op)
+    }
 }
 
 fn is_key_not_found(err: &windows::core::Error) -> bool {
-    const NTE_NOT_FOUND: u32 = 0x80090011;
-    const NTE_BAD_KEYSET: u32 = 0x80090016;
+    const NTE_NOT_FOUND: u32 = 0x8009_0011;
+    const NTE_BAD_KEYSET: u32 = 0x8009_0016;
     let code = err.code().0 as u32;
     code == NTE_NOT_FOUND || code == NTE_BAD_KEYSET
 }
@@ -257,7 +301,7 @@ fn is_key_not_found(err: &windows::core::Error) -> bool {
 fn set_u32_property(key: NCRYPT_KEY_HANDLE, name: PCWSTR, value: u32) -> TpmResult<()> {
     unsafe {
         NCryptSetProperty(key, name, &value.to_le_bytes(), NCRYPT_NO_FLAGS)
-            .map_err(ncrypt_err("NCryptSetProperty"))?;
+            .map_err(map_ncrypt("NCryptSetProperty", NcryptOp::General))?;
     }
     Ok(())
 }
@@ -272,11 +316,17 @@ fn set_machine_key_dacl(key: NCRYPT_KEY_HANDLE) -> TpmResult<()> {
             &mut sd,
             None,
         )
-        .map_err(ncrypt_err("ConvertStringSecurityDescriptorToSecurityDescriptorW"))?;
+        .map_err(map_ncrypt(
+            "ConvertStringSecurityDescriptorToSecurityDescriptorW",
+            NcryptOp::General,
+        ))?;
 
         let len = GetSecurityDescriptorLength(sd);
         if len == 0 {
-            return Err(TpmOpError::other("empty security descriptor from SDDL"));
+            return Err(TpmOpError::marshalling(
+                "set_machine_key_dacl",
+                "empty security descriptor from SDDL",
+            ));
         }
         let sd_bytes = std::slice::from_raw_parts(sd.0.cast(), len as usize);
 
@@ -286,7 +336,7 @@ fn set_machine_key_dacl(key: NCRYPT_KEY_HANDLE) -> TpmResult<()> {
             sd_bytes,
             NCRYPT_FLAGS(DACL_SECURITY_INFORMATION.0),
         )
-        .map_err(ncrypt_err("NCryptSetProperty(Security Descr)"))?;
+        .map_err(map_ncrypt("NCryptSetProperty(Security Descr)", NcryptOp::General))?;
     }
     Ok(())
 }
@@ -301,17 +351,24 @@ fn unwrap_tpm2b_response(buf: &[u8]) -> Vec<u8> {
     buf.to_vec()
 }
 
-fn get_buffer_property_key(key: NCRYPT_KEY_HANDLE, name: PCWSTR) -> TpmResult<Vec<u8>> {
+fn get_buffer_property_key(
+    key: NCRYPT_KEY_HANDLE,
+    name: PCWSTR,
+    op: NcryptOp,
+) -> TpmResult<Vec<u8>> {
     let mut size = 0u32;
     unsafe {
         NCryptGetProperty(key, name, None, &mut size, NCRYPT_NO_SECURITY_FLAGS)
-            .map_err(ncrypt_err("NCryptGetProperty(size)"))?;
+            .map_err(map_ncrypt("NCryptGetProperty(size)", op))?;
         if size == 0 {
-            return Err(TpmOpError::other("NCryptGetProperty returned zero size"));
+            return Err(TpmOpError::marshalling(
+                "NCryptGetProperty",
+                "returned zero size",
+            ));
         }
         let mut buf = vec![0u8; size as usize];
         NCryptGetProperty(key, name, Some(&mut buf), &mut size, NCRYPT_NO_SECURITY_FLAGS)
-            .map_err(ncrypt_err("NCryptGetProperty"))?;
+            .map_err(map_ncrypt("NCryptGetProperty", op))?;
         buf.truncate(size as usize);
         Ok(buf)
     }
@@ -321,13 +378,16 @@ fn get_buffer_property_prov(prov: NCRYPT_PROV_HANDLE, name: PCWSTR) -> TpmResult
     let mut size = 0u32;
     unsafe {
         NCryptGetProperty(prov, name, None, &mut size, NCRYPT_NO_SECURITY_FLAGS)
-            .map_err(ncrypt_err("NCryptGetProperty(size)"))?;
+            .map_err(map_ncrypt("NCryptGetProperty(size)", NcryptOp::General))?;
         if size == 0 {
-            return Err(TpmOpError::other("NCryptGetProperty returned zero size"));
+            return Err(TpmOpError::marshalling(
+                "NCryptGetProperty",
+                "returned zero size",
+            ));
         }
         let mut buf = vec![0u8; size as usize];
         NCryptGetProperty(prov, name, Some(&mut buf), &mut size, NCRYPT_NO_SECURITY_FLAGS)
-            .map_err(ncrypt_err("NCryptGetProperty"))?;
+            .map_err(map_ncrypt("NCryptGetProperty", NcryptOp::General))?;
         buf.truncate(size as usize);
         Ok(buf)
     }
@@ -335,7 +395,10 @@ fn get_buffer_property_prov(prov: NCRYPT_PROV_HANDLE, name: PCWSTR) -> TpmResult
 
 fn decode_id_binding(blob: &[u8]) -> TpmResult<PcpAkMetadata> {
     if blob.len() < 4 {
-        return Err(TpmOpError::other("PCP ID binding blob too short"));
+        return Err(TpmOpError::marshalling(
+            "decode_id_binding",
+            "PCP ID binding blob too short",
+        ));
     }
     let mut cursor = blob;
     let raw_public = read_be_tpm2b(&mut cursor)?;
@@ -343,7 +406,10 @@ fn decode_id_binding(blob: &[u8]) -> TpmResult<PcpAkMetadata> {
     let raw_attest = read_be_tpm2b(&mut cursor)?;
     let raw_signature = cursor.to_vec();
     if raw_public.is_empty() {
-        return Err(TpmOpError::other("PCP ID binding missing public key"));
+        return Err(TpmOpError::marshalling(
+            "decode_id_binding",
+            "PCP ID binding missing public key",
+        ));
     }
     Ok(PcpAkMetadata {
         key_name: String::new(),
@@ -357,12 +423,18 @@ fn decode_id_binding(blob: &[u8]) -> TpmResult<PcpAkMetadata> {
 
 fn read_be_tpm2b(cursor: &mut &[u8]) -> TpmResult<Vec<u8>> {
     if cursor.len() < 2 {
-        return Err(TpmOpError::other("truncated TPM2B in PCP binding"));
+        return Err(TpmOpError::marshalling(
+            "read_be_tpm2b",
+            "truncated TPM2B in PCP binding",
+        ));
     }
     let size = u16::from_be_bytes([cursor[0], cursor[1]]) as usize;
     *cursor = &cursor[2..];
     if cursor.len() < size {
-        return Err(TpmOpError::other("truncated TPM2B payload in PCP binding"));
+        return Err(TpmOpError::marshalling(
+            "read_be_tpm2b",
+            "truncated TPM2B payload in PCP binding",
+        ));
     }
     let out = cursor[..size].to_vec();
     *cursor = &cursor[size..];
@@ -379,24 +451,25 @@ fn parse_tbs_context(buf: &[u8]) -> TpmResult<*mut std::ffi::c_void> {
             let ptr = u32::from_le_bytes(buf[..4].try_into().expect("4 bytes"));
             Ok(ptr as *mut std::ffi::c_void)
         }
-        _ => Err(TpmOpError::other(format!(
-            "PCP TBS context has unexpected size {} (expected 4 or 8)",
-            buf.len()
-        ))),
+        len => Err(TpmOpError::marshalling(
+            "parse_tbs_context",
+            format!("PCP TBS context has unexpected size {len} (expected 4 or 8)"),
+        )),
     }
 }
 
 fn parse_tpm_object_handle(buf: &[u8]) -> TpmResult<u32> {
     if buf.len() < 4 {
-        return Err(TpmOpError::other(format!(
-            "PCP TPM object handle too short ({} bytes)",
-            buf.len()
-        )));
+        return Err(TpmOpError::marshalling(
+            "parse_tpm_object_handle",
+            format!("PCP TPM object handle too short ({} bytes)", buf.len()),
+        ));
     }
     Ok(u32::from_le_bytes(buf[..4].try_into().expect("4 bytes")))
 }
 
 pub fn provision_ak_blob_with_options(opts: &ProvisionAkOptions) -> TpmResult<AkBlob> {
+    validate_provision_options(opts)?;
     let pcp = PcpProvider::open()?;
     let key_name = resolve_key_name(opts);
     let key = pcp.create_identity_ak(&key_name, opts)?;
@@ -475,7 +548,10 @@ pub fn quote_with_pcp_ak_blob(
 }
 
 fn quote_scheme_retry(err: &TpmOpError) -> bool {
-    err.tpm_rc == Some(0x0000_0092) || err.tpm_rc == Some(0x0000_0192)
+    matches!(
+        err.tpm_rc(),
+        Some(0x0000_0092) | Some(0x0000_0192)
+    )
 }
 
 pub fn activate_credential_with_pcp_blob(
@@ -550,5 +626,26 @@ pub fn provision_context_label() -> &'static str {
         "Administrator (elevated)"
     } else {
         "standard user"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tbs::codes;
+
+    #[test]
+    fn machine_provision_unprivileged_requires_elevation() {
+        if is_process_elevated() || is_running_as_system() {
+            return;
+        }
+        let opts = ProvisionAkOptions {
+            key_name: Some("node-tpm2-test-machine-elevation".to_string()),
+            scope: PcpKeyScope::Machine,
+            overwrite: true,
+        };
+        let err = provision_ak_with_options(&opts).unwrap_err();
+        assert_eq!(err.code(), codes::REQUIRES_ELEVATION);
+        assert!(err.hresult().is_some());
     }
 }

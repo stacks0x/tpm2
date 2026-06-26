@@ -215,7 +215,7 @@ fn run_create_primary() -> Result<(), String> {
 
 fn run_pcr_read() -> Result<(), String> {
     println!("== pcr-read ==");
-    let pcrs = pcr_read(&[0, 1, 7], PcrBank::Sha256).map_err(|e| e.message)?;
+    let pcrs = pcr_read(&[0, 1, 7], PcrBank::Sha256).map_err(|e| e.message())?;
     for idx in [0u32, 1, 7] {
         let digest = pcrs.get(&idx).ok_or_else(|| format!("missing PCR {idx}"))?;
         println!("  PCR {idx}: {digest}");
@@ -227,7 +227,7 @@ fn run_pcr_read() -> Result<(), String> {
 fn run_quote() -> Result<(), String> {
     println!("== quote (wrapped AK blob, qualifyingData -> extraData) ==");
 
-    let blob = provision_ak_blob().map_err(|e| e.message)?;
+    let blob = provision_ak_blob().map_err(|e| e.message())?;
     print_blob_summary(&blob);
     quote_blob_roundtrip(&blob)
 }
@@ -235,7 +235,7 @@ fn run_quote() -> Result<(), String> {
 fn quote_blob_roundtrip(blob: &AkBlob) -> Result<(), String> {
     let qualifying = b"node-tpm2-tbs-probe-qualifying-data";
     let result = quote_with_ak_blob(blob, &[0, 1, 7], qualifying, PcrBank::Sha256)
-        .map_err(|e| e.message)?;
+        .map_err(|e| e.message())?;
 
     println!("  quote message: {} bytes", result.message.len());
     println!("  quote signature: {} bytes", result.signature.len());
@@ -251,7 +251,7 @@ fn quote_blob_roundtrip(blob: &AkBlob) -> Result<(), String> {
 fn run_provision_ak() -> Result<(), String> {
     println!("== provision-ak (wrapped AK blob + SPKI DER) ==");
 
-    let result = provision_ak().map_err(|e| e.message)?;
+    let result = provision_ak().map_err(|e| e.message())?;
     println!("  ak public DER: {} bytes", result.ak_public_der.len());
     print_blob_summary(&result.ak_blob);
     println!("  PASS  provisionAk returned exportable blob");
@@ -270,7 +270,7 @@ fn run_activate_credential() -> Result<(), String> {
         return Ok(());
     }
 
-    let blob = provision_ak_blob().map_err(|e| e.message)?;
+    let blob = provision_ak_blob().map_err(|e| e.message())?;
     match credential_roundtrip_self_test(&blob) {
         Ok(recovered) => {
             if recovered != b"node-tpm2-credential-self-test" {
@@ -279,14 +279,14 @@ fn run_activate_credential() -> Result<(), String> {
             println!("  PASS  credential roundtrip recovered expected secret");
             Ok(())
         }
-        Err(e) => Err(e.message),
+        Err(e) => Err(e.message()),
     }
 }
 
 #[cfg(windows)]
 fn run_pcp_capabilities() -> Result<(), String> {
     println!("== pcp-capabilities ==");
-    let caps = node_tpm2::tbs::pcp::pcp_capabilities().map_err(|e| e.message)?;
+    let caps = node_tpm2::tbs::pcp::pcp_capabilities().map_err(|e| e.message())?;
     println!(
         "  Security Descr Support: {}",
         caps.security_descr_supported
@@ -355,7 +355,7 @@ fn run_machine_provision() -> Result<(), String> {
         scope: PcpKeyScope::Machine,
         overwrite: true,
     };
-    let result = provision_ak_with_options(&opts).map_err(|e| e.message)?;
+    let result = provision_ak_with_options(&opts).map_err(|e| e.message())?;
     print_blob_summary(&result.ak_blob);
     write_ak_blob_file(&out_path, &result.ak_blob)?;
     println!("  key name: {key_name}");
@@ -470,7 +470,7 @@ fn run_policy_secret() -> Result<(), String> {
     let handle = node_tpm2::tbs::commands::object_handle_from_response(&resp)
         .ok_or("missing session handle")?;
     let nonce_tpm = node_tpm2::tbs::parse::start_auth_session_nonce_tpm(&resp)
-        .map_err(|e| e.message)?;
+        .map_err(|e| e.message())?;
     println!("  session handle: 0x{handle:08X}");
     println!("  nonceTPM: {} bytes", nonce_tpm.len());
 

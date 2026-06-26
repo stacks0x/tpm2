@@ -19,13 +19,15 @@ function parseNativeError(err) {
   if (msg.startsWith('__tpm2__')) {
     const rest = msg.slice('__tpm2__'.length);
     const parts = rest.split('|');
-    const [code, message, suggestion, tpmRcStr] = parts;
+    const [code, message, suggestion, tpmRcStr, hresultStr] = parts;
     const tpmRc = tpmRcStr ? Number.parseInt(tpmRcStr, 10) : undefined;
+    const hresult = hresultStr ? Number.parseInt(hresultStr, 10) : undefined;
     return new TpmError(
       code,
       message,
       suggestion || undefined,
       Number.isFinite(tpmRc) ? tpmRc : undefined,
+      Number.isFinite(hresult) ? hresult : undefined,
     );
   }
   return err;
@@ -54,12 +56,13 @@ function requireNative(method) {
 }
 
 export class TpmError extends Error {
-  constructor(code, message, suggestion, tpmRc) {
+  constructor(code, message, suggestion, tpmRc, hresult) {
     super(message);
     this.name = 'TpmError';
     this.code = code;
     this.suggestion = suggestion;
     this.tpmRc = tpmRc;
+    this.hresult = hresult;
   }
 }
 

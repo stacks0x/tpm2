@@ -2,7 +2,14 @@ export declare class TpmError extends Error {
   code: string;
   suggestion?: string;
   tpmRc?: number;
-  constructor(code: string, message: string, suggestion?: string, tpmRc?: number);
+  hresult?: number;
+  constructor(
+    code: string,
+    message: string,
+    suggestion?: string,
+    tpmRc?: number,
+    hresult?: number,
+  );
 }
 
 export declare type AkBlob = {

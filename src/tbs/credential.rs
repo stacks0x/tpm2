@@ -329,7 +329,7 @@ pub fn activate_credential_with_ak_blob(
 }
 
 fn step<T>(label: &str, result: TpmResult<T>) -> TpmResult<T> {
-    result.map_err(|e| TpmOpError::other(format!("{label}: {}", e.message)))
+    result.map_err(|e| TpmOpError::other(format!("{label}: {}", e.message())))
 }
 
 /// Self-contained roundtrip for probes: MakeCredential then ActivateCredential.
@@ -356,7 +356,7 @@ pub fn credential_roundtrip_self_test(ak_blob: &AkBlob) -> TpmResult<Vec<u8>> {
                 .map_err(|sw_err| {
                     TpmOpError::other(format!(
                         "MakeCredential failed (TPM: {}; software: {})",
-                        tpm_err.message, sw_err.message
+                        tpm_err.message(), sw_err.message()
                     ))
                 })
         }),

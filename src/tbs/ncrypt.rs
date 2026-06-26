@@ -17,6 +17,8 @@ const NTE_INVALID_PARAMETER: u32 = 0x8009_0027;
 const NTE_DEVICE_NOT_READY: u32 = 0x8009_0030;
 const NTE_PERM: u32 = 0x8009_0010;
 const NTE_BAD_FLAGS: u32 = 0x8009_0029;
+/// PCP machine-key create from a standard user often surfaces as internal error, not NTE_PERM.
+const NTE_INTERNAL_ERROR: u32 = 0x8009_000F;
 /// Observed from PCP activation read when caller lacks elevation.
 const PCP_TPM_RC_VALUE: u32 = 0x8028_0084;
 
@@ -45,9 +47,11 @@ pub fn classify_ncrypt(hresult: u32, context: &str, op: NcryptOp) -> TpmOpError 
         NTE_INVALID_PARAMETER => TpmOpError::invalid_argument(format!(
             "{context}: invalid NCrypt parameter (HRESULT 0x{hresult:08X})"
         )),
-        NTE_DEVICE_NOT_READY | NTE_PERM | NTE_BAD_FLAGS => {
+        NTE_DEVICE_NOT_READY | NTE_PERM | NTE_BAD_FLAGS | NTE_INTERNAL_ERROR => {
             if op == NcryptOp::MachineProvision {
                 TpmOpError::RequiresElevation { context, hresult }
+            } else if hresult == NTE_INTERNAL_ERROR {
+                TpmOpError::marshalling_hresult(context, "NCrypt failed", hresult)
             } else {
                 TpmOpError::RequiresElevation { context, hresult }
             }
@@ -95,6 +99,17 @@ mod tests {
         );
         assert_eq!(err.code(), codes::REQUIRES_ELEVATION);
         assert_eq!(err.hresult(), Some(PCP_TPM_RC_VALUE));
+    }
+
+    #[test]
+    fn machine_provision_internal_error_is_requires_elevation() {
+        let err = classify_ncrypt(
+            NTE_INTERNAL_ERROR,
+            "NCryptCreatePersistedKey",
+            NcryptOp::MachineProvision,
+        );
+        assert_eq!(err.code(), codes::REQUIRES_ELEVATION);
+        assert_eq!(err.hresult(), Some(NTE_INTERNAL_ERROR));
     }
 
     #[test]

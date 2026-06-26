@@ -125,6 +125,7 @@ There is **no separate TPM daemon to install**, but the OS still controls access
 ## Validate your install
 
 ```bash
+npm ls node-tpm2
 node node_modules/node-tpm2/examples/smoke-test.mjs runtime
 ```
 
@@ -134,6 +135,8 @@ Windows fleet smoke (elevated provision, then standard-user quote):
 node node_modules/node-tpm2/examples/smoke-test.mjs provision-machine --key-name my-app-device-ak --out ak.blob.json
 node node_modules/node-tpm2/examples/smoke-test.mjs quote --in ak.blob.json
 ```
+
+Use paths under `node_modules/node-tpm2/` after `npm install` (not `examples/` at the project root).
 
 ## Platform support
 

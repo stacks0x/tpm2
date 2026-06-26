@@ -127,8 +127,8 @@ async function runProvisionMachine(args) {
   saveBlob(out, akBlob);
   console.log(`PASS  Tpm.provisionAk(machine) keyName=${keyName} SPKI=${akPublicDer.length}B`);
   console.log(`  wrote ${out}`);
-  console.log('\nNEXT (standard user):');
-  console.log(`  node examples/smoke-test.mjs quote --in ${out}`);
+  console.log('\nNEXT (standard user, from your project directory):');
+  console.log(`  node node_modules/node-tpm2/examples/smoke-test.mjs quote --in ${out}`);
 }
 
 async function runQuote(args) {
@@ -172,7 +172,9 @@ async function main() {
 
 main().catch((err) => {
   console.error('FAIL:', err.message ?? err);
+  if (err.code) console.error('  code:', err.code);
   if (err.suggestion) console.error('  suggestion:', err.suggestion);
   if (err.tpmRc != null) console.error('  tpmRc:', err.tpmRc);
+  if (err.hresult != null) console.error('  hresult:', err.hresult);
   process.exit(1);
 });

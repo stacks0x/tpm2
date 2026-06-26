@@ -114,6 +114,15 @@ try {
 }
 ```
 
+## Validate after install
+
+```bash
+npm ls node-tpm2
+node node_modules/node-tpm2/examples/smoke-test.mjs runtime
+```
+
+Smoke-test is under `node_modules/node-tpm2/examples/` after `npm install`, not `./examples/` at your project root.
+
 ## What ships in npm
 
 The published package contains the JavaScript API, type definitions, user docs, and the smoke-test example — **not** Rust sources, `tbs-probe`, or spike binaries. Those stay in the git repo for developers.

@@ -70,7 +70,8 @@
     "artifacts": "napi artifacts",
     "create-npm-dirs": "napi create-npm-dirs",
     "patch-windows-npm": "node scripts/patch-windows-npm-packages.mjs",
-    "prepublishOnly": "napi prepublish -t npm --skip-optional-publish"
+    "prepublishOnly": "napi prepublish -t npm --skip-optional-publish",
+    "publish:beta": "node scripts/publish-beta.mjs"
   },
   "devDependencies": {
     "@napi-rs/cli": "^3.7.2"

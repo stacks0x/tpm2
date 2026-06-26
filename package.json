@@ -68,6 +68,7 @@
     "spike": "cargo run --features esapi --bin spike --",
     "spike:all": "cargo run --features esapi --bin spike -- all",
     "artifacts": "napi artifacts",
+    "create-npm-dirs": "napi create-npm-dirs",
     "patch-windows-npm": "node scripts/patch-windows-npm-packages.mjs",
     "prepublishOnly": "napi prepublish -t npm --skip-optional-publish"
   },

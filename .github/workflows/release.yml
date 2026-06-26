@@ -93,15 +93,30 @@ jobs:
         run: ls -R npm
       - name: Publish platform packages
         run: |
+          VERSION=$(node -p "require('./package.json').version")
+          if [[ "$VERSION" == *"-"* ]]; then
+            DIST_TAG=beta
+          else
+            DIST_TAG=latest
+          fi
+          echo "Publishing platform packages (dist-tag: $DIST_TAG, version: $VERSION)"
           for dir in npm/*/; do
             echo "Publishing ${dir}..."
-            (cd "$dir" && npm publish --access public --provenance)
+            (cd "$dir" && npm publish --access public --provenance --tag "$DIST_TAG")
           done
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
       - name: Verify native loader is present
         run: test -f native.cjs && test -f native.d.ts
       - name: Publish node-tpm2
-        run: npm publish --access public --provenance
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          if [[ "$VERSION" == *"-"* ]]; then
+            DIST_TAG=beta
+          else
+            DIST_TAG=latest
+          fi
+          echo "Publishing node-tpm2 (dist-tag: $DIST_TAG, version: $VERSION)"
+          npm publish --access public --provenance --tag "$DIST_TAG"
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

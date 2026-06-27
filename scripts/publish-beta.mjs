@@ -50,6 +50,7 @@ const REQUIRED_EXPORTS = [
   'getFixedProperties',
   'isAvailable',
   'activateCredential',
+  'randomBytes',
 ];
 
 function assertBinaryExports(nodePath) {

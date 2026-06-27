@@ -32,6 +32,9 @@ export declare type AkBlob = {
   private: Buffer;
 };
 
+/** General key blob (same wire shape as AkBlob; distinct type for clarity). */
+export declare type KeyBlob = AkBlob;
+
 export declare type QuoteOptions = {
   akBlob: AkBlob;
   pcrSelection: number[];
@@ -74,11 +77,31 @@ export declare type ActivateCredentialFlatOptions = ActivateCredentialOptions & 
   akBlob: AkBlob;
 };
 
+/** @throws {TpmError} NOT_SUPPORTED until Phase 2 */
+export declare type KeyCreateOptions = {
+  type: 'ecc' | 'rsa';
+  sign?: boolean;
+  decrypt?: boolean;
+};
+
+/** @throws {TpmError} NOT_SUPPORTED until Phase 5 */
+export declare type SealOptions = {
+  data: Buffer;
+  pcrSelection?: number[];
+};
+
 export declare interface AkHandle {
   export(): AkBlob;
   readonly publicKeyDer: Buffer;
   quote(opts: Omit<QuoteOptions, 'akBlob'>): Promise<QuoteResult>;
   activateCredential(opts: ActivateCredentialOptions): Promise<Buffer>;
+}
+
+/** @throws {TpmError} NOT_SUPPORTED until Phase 2 */
+export declare interface KeyHandle {
+  export(): KeyBlob;
+  sign(digest: Buffer): Promise<Buffer>;
+  decrypt(cipher: Buffer): Promise<Buffer>;
 }
 
 export declare type TpmInfo = {
@@ -92,6 +115,29 @@ export declare interface TpmHandle {
   info(): Promise<TpmInfo>;
   pcr: {
     read(selection: number[], bank?: 'sha256'): Promise<Record<number, string>>;
+    /** @throws {TpmError} NOT_SUPPORTED until Phase 3 */
+    extend(index: number, digest: Buffer): Promise<void>;
+  };
+  random: {
+    bytes(count: number): Promise<Buffer>;
+  };
+  nv: {
+    /** @throws {TpmError} NOT_SUPPORTED until Phase 4 */
+    read(handle: string, offset?: number, size?: number): Promise<Buffer>;
+    /** @throws {TpmError} NOT_SUPPORTED until Phase 4 */
+    write(handle: string, data: Buffer, offset?: number): Promise<void>;
+  };
+  keys: {
+    /** @throws {TpmError} NOT_SUPPORTED until Phase 2 */
+    create(opts: KeyCreateOptions): Promise<KeyHandle>;
+    /** @throws {TpmError} NOT_SUPPORTED until Phase 2 */
+    load(blob: KeyBlob): Promise<KeyHandle>;
+  };
+  seal: {
+    /** @throws {TpmError} NOT_SUPPORTED until Phase 5 */
+    seal(opts: SealOptions): Promise<Buffer>;
+    /** @throws {TpmError} NOT_SUPPORTED until Phase 5 */
+    unseal(blob: Buffer): Promise<Buffer>;
   };
   attest: {
     ekCertificate(): Promise<Buffer | null>;
@@ -107,6 +153,7 @@ export declare const Tpm: {
   open(): Promise<TpmHandle>;
   getFixedProperties(): Promise<TpmInfo>;
   info(): Promise<TpmInfo>;
+  randomBytes(count: number): Promise<Buffer>;
   pcrRead(selection: number[], bank?: 'sha256'): Promise<Record<number, string>>;
   readPublic(handle: string): Promise<ReadPublicResult>;
   readEkCertificate(): Promise<Buffer | null>;
@@ -114,26 +161,3 @@ export declare const Tpm: {
   provisionAk(opts?: ProvisionAkOptions): Promise<ProvisionAkResult>;
   activateCredential(opts: ActivateCredentialFlatOptions): Promise<Buffer>;
 };
-
-export declare function pcrRead(
-  selection: number[],
-  bank?: 'sha256',
-): Promise<Record<number, string>>;
-
-export declare function readPublic(handle: string): Promise<ReadPublicResult>;
-
-export declare function readEkCertificate(): Promise<Buffer | null>;
-
-export declare function quote(opts: QuoteOptions): Promise<QuoteResult>;
-
-export declare function provisionAk(
-  opts?: ProvisionAkOptions,
-): Promise<ProvisionAkResult>;
-
-export declare function activateCredential(
-  opts: ActivateCredentialFlatOptions,
-): Promise<Buffer>;
-
-export declare function getFixedProperties(): Promise<TpmInfo>;
-
-export declare function isAvailable(): Promise<boolean>;

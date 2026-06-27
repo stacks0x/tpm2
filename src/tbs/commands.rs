@@ -138,11 +138,14 @@ pub fn transient_handles_from_getcap(resp: &[u8]) -> Option<Vec<u32>> {
     Some(handles)
 }
 
+/// TPM2_GetRandom(bytesRequested)
+pub fn get_random_cmd(bytes_requested: u16) -> Vec<u8> {
+    command(TPM_ST_NO_SESSIONS, TPM_CC_GET_RANDOM, &u16(bytes_requested))
+}
+
 /// TPM2_GetRandom(8)
 pub fn get_random_8() -> [u8; 12] {
-    let body = [0x00, 0x08u8];
-    let cmd = command(TPM_ST_NO_SESSIONS, TPM_CC_GET_RANDOM, &body);
-    cmd.try_into().expect("GetRandom is 12 bytes")
+    get_random_cmd(8).try_into().expect("GetRandom is 12 bytes")
 }
 
 /// Null userAuth + empty data inside TPM2B_SENSITIVE_CREATE (what tpm2-tss sends).

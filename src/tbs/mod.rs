@@ -14,6 +14,7 @@ pub mod policy_digest;
 pub mod pcr;
 pub mod properties;
 pub mod quote;
+pub mod random;
 pub mod rc;
 pub mod read_public;
 pub mod session_hmac;

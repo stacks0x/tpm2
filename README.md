@@ -189,7 +189,7 @@ More detail: [getting-started.md](./docs/getting-started.md) · [windows-pcp.md]
 | `tpm.info()` | ✓ | ✓ | ✓ |
 | `tpm.readPublic(handle)` | ✓ | ✓ | ✓ |
 | **random** | | | |
-| `tpm.random.bytes(n)` | ✓ *planned* | ✓ *planned* | ✓ |
+| `tpm.random.bytes(n)` | ✓ | ✓ | ✓ |
 | **pcr** | | | |
 | `tpm.pcr.read(...)` | ✓ | ✓ | ✓ |
 | `tpm.pcr.extend(i, digest)` | ✓ *planned* | ✓ *planned* | ✓ |
@@ -243,6 +243,13 @@ await tpm.readPublic('0x81000001');   // → { publicKeyDer, name }
 
 ```javascript
 await tpm.pcr.read([0, 1, 7], 'sha256');   // → { 0: 'hex…', 1: 'hex…', … }
+```
+
+### Random
+
+```javascript
+await tpm.random.bytes(32);   // Buffer from TPM2_GetRandom
+await Tpm.randomBytes(32);    // flat
 ```
 
 ### Attestation
@@ -375,7 +382,7 @@ Subsystem namespaces not yet on `TpmHandle`. See [docs/roadmap.md](./docs/roadma
 
 | Namespace | Methods |
 |-----------|---------|
-| `tpm.random` | `bytes(n)` |
+| `tpm.random` | `bytes(n)` ✅ |
 | `tpm.pcr` | `extend(index, digest)` |
 | `tpm.nv` | `read`, `write` |
 | `tpm.keys` | `create`, `load`, `KeyHandle.sign`, `KeyHandle.decrypt` |

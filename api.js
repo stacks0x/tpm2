@@ -66,6 +66,12 @@ export class TpmError extends Error {
   }
 }
 
+function notSupported(feature) {
+  return async () => {
+    throw new TpmError('NOT_SUPPORTED', `${feature} is not implemented yet.`);
+  };
+}
+
 function createAkHandle(akPublicDer, akBlob) {
   return {
     /** Wrapped TPM2B_PUBLIC + TPM2B_PRIVATE for persistence (no persistent TPM handle). */
@@ -114,6 +120,33 @@ function createTpmHandle() {
         requireNative('pcrRead');
         return native.pcrRead(selection, bank);
       }),
+
+      /** Extend a PCR digest. Not yet implemented. */
+      extend: notSupported('tpm.pcr.extend'),
+    },
+
+    random: {
+      /** Read `count` bytes from the TPM RNG (GetRandom). */
+      bytes: wrapNative(async (count) => {
+        requireNative('randomBytes');
+        const buf = await native.randomBytes(count);
+        return Buffer.from(buf);
+      }),
+    },
+
+    nv: {
+      read: notSupported('tpm.nv.read'),
+      write: notSupported('tpm.nv.write'),
+    },
+
+    keys: {
+      create: notSupported('tpm.keys.create'),
+      load: notSupported('tpm.keys.load'),
+    },
+
+    seal: {
+      seal: notSupported('tpm.seal'),
+      unseal: notSupported('tpm.unseal'),
     },
 
     attest: {
@@ -201,6 +234,13 @@ export const Tpm = {
   async info() {
     return this.getFixedProperties();
   },
+
+  /** Flat: TPM RNG bytes (GetRandom). Prefer `tpm.random.bytes` on an open handle. */
+  randomBytes: wrapNative(async (count) => {
+    requireNative('randomBytes');
+    const buf = await native.randomBytes(count);
+    return Buffer.from(buf);
+  }),
 
   /** Flat native binding: PCR read. Prefer `tpm.pcr.read` on an open handle. */
   pcrRead: wrapNative(async (selection, bank) => {

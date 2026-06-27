@@ -103,27 +103,25 @@ Flat equivalents remain on `Tpm.*` for every operation (thin wrappers over the s
 
 ## Implementation phases
 
-### Phase 0 — API hygiene (1–2 days)
+### Phase 0 — API hygiene ✅ (this branch)
 
 **Goal:** Published types match runtime; namespace skeleton on `TpmHandle`.
 
-- Remove bogus top-level exports from `index.d.ts` (only `Tpm`, `TpmError` from `index.js`).
-- Add empty namespace objects on `TpmHandle`: `random`, `nv`, `keys`, `seal` — methods throw `NOT_SUPPORTED` until implemented (or hide until ready; prefer explicit `NOT_SUPPORTED` during beta).
-- Add `KeyHandle` interface mirroring `AkHandle` (`export`, `sign`, `decrypt`).
-- Document target API in README + this roadmap.
-- Acceptance: `npm run verify:package`; TypeScript consumers see only real exports.
+- [x] Remove bogus top-level exports from `index.d.ts`
+- [x] Add namespace objects on `TpmHandle`: `random`, `nv`, `keys`, `seal`, `pcr.extend`
+- [x] Add `KeyHandle` / `KeyBlob` types; unimplemented methods throw `NOT_SUPPORTED`
+- [ ] Acceptance: `npm run verify:package`
 
-### Phase 1 — `tpm.random.bytes` (2–3 days)
+### Phase 1 — `tpm.random.bytes` ✅ (this branch)
 
 **Goal:** Public `GetRandom`.
 
-- Rust: `random.rs` — marshal `TPM2_GetRandom`, size limit per spec (≤ 64 bytes per call; loop for larger).
-- NAPI: `random_bytes(n: u32)`.
-- JS: `tpm.random.bytes(n)`, `Tpm.randomBytes(n)`.
-- Tests: unit golden command; integration on Linux + Windows VM.
-- Acceptance: unprivileged success on both platforms with normal TPM access.
+- [x] Rust: `random.rs` — marshal `TPM2_GetRandom`, ≤64 bytes per call, loop for larger
+- [x] NAPI: `randomBytes`
+- [x] JS: `tpm.random.bytes(n)`, `Tpm.randomBytes(n)`
+- [ ] Tests: integration on Linux + Windows VM
 
-### Phase 2 — `tpm.keys` (1–2 weeks)
+### Phase 2 — `tpm.keys` (next)
 
 **Goal:** General exportable signing keys, separate from attestation.
 

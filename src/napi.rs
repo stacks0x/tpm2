@@ -64,6 +64,19 @@ pub struct QuoteOptionsJs {
 }
 
 #[napi]
+pub async fn random_bytes(count: u32) -> Result<Buffer> {
+    #[cfg(not(any(windows, target_os = "linux")))]
+    {
+        return Err(TpmOpError::unavailable("TPM is not available on this platform").into());
+    }
+    #[cfg(any(windows, target_os = "linux"))]
+    {
+        let bytes = crate::tbs::random::random_bytes(count)?;
+        Ok(Buffer::from(bytes))
+    }
+}
+
+#[napi]
 pub async fn is_available() -> Result<bool> {
     #[cfg(target_os = "macos")]
     {

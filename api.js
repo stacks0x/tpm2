@@ -72,6 +72,32 @@ function notSupported(feature) {
   };
 }
 
+function createKeyHandle(publicKeyDer, keyBlob) {
+  return {
+    export() {
+      return {
+        public: Buffer.from(keyBlob.public),
+        private: Buffer.from(keyBlob.private),
+      };
+    },
+
+    get publicKeyDer() {
+      return Buffer.from(publicKeyDer);
+    },
+
+    sign: wrapNative(async (digest) => {
+      requireNative('signKeyBlob');
+      const sig = await native.signKeyBlob({
+        keyBlob,
+        digest,
+      });
+      return Buffer.from(sig);
+    }),
+
+    decrypt: notSupported('key.decrypt'),
+  };
+}
+
 function createAkHandle(akPublicDer, akBlob) {
   return {
     /** Wrapped TPM2B_PUBLIC + TPM2B_PRIVATE for persistence (no persistent TPM handle). */
@@ -140,8 +166,21 @@ function createTpmHandle() {
     },
 
     keys: {
-      create: notSupported('tpm.keys.create'),
-      load: notSupported('tpm.keys.load'),
+      create: wrapNative(async (opts) => {
+        requireNative('createKey');
+        const result = await native.createKey({
+          keyType: opts?.type,
+          sign: opts?.sign,
+          decrypt: opts?.decrypt,
+        });
+        return createKeyHandle(result.publicKeyDer, result.keyBlob);
+      }),
+
+      load: wrapNative(async (blob) => {
+        requireNative('keyBlobPublicDer');
+        const publicKeyDer = await native.keyBlobPublicDer(blob);
+        return createKeyHandle(publicKeyDer, blob);
+      }),
     },
 
     seal: {
@@ -284,5 +323,24 @@ export const Tpm = {
   activateCredential: wrapNative(async (opts) => {
     requireNative('activateCredential');
     return native.activateCredential(opts);
+  }),
+
+  createKey: wrapNative(async (opts) => {
+    requireNative('createKey');
+    const result = await native.createKey({
+      keyType: opts?.type,
+      sign: opts?.sign,
+      decrypt: opts?.decrypt,
+    });
+    return {
+      publicKeyDer: result.publicKeyDer,
+      keyBlob: result.keyBlob,
+    };
+  }),
+
+  signKeyBlob: wrapNative(async (opts) => {
+    requireNative('signKeyBlob');
+    const sig = await native.signKeyBlob(opts);
+    return Buffer.from(sig);
   }),
 };

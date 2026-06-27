@@ -86,8 +86,6 @@
     "node-tpm2-linux-arm64-gnu": "0.0.4-beta.3",
     "node-tpm2-linux-x64-musl": "0.0.4-beta.3",
     "node-tpm2-linux-arm64-musl": "0.0.4-beta.3",
-    "node-tpm2-darwin-arm64": "0.0.4-beta.3",
-    "node-tpm2-win32-x64-msvc": "0.0.4-beta.3",
-    "node-tpm2-win32-arm64-msvc": "0.0.4-beta.3"
+    "node-tpm2-darwin-arm64": "0.0.4-beta.3"
   }
 }

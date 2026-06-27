@@ -37,6 +37,11 @@ const SOURCE_FORBIDDEN = [
   /^artifacts\//,
   /\.ctx$/,
   /^policy\//,
+  /^tests\//,
+  /\/tests\//,
+  /__tests__\//,
+  /\.test\.(m?js|c?js|ts)$/,
+  /\.spec\.(m?js|c?js|ts)$/,
 ];
 
 /** Extra rules for the main JS package (binaries ship via optional platform deps). */
@@ -76,7 +81,12 @@ export function assertMainTarball() {
   const files = parseNpmPackFiles(root);
   assertForbidden(files, 'main', MAIN_FORBIDDEN);
   for (const file of files) {
-    if (file.startsWith('examples/')) continue;
+    if (file.startsWith('examples/')) {
+      if (file !== 'examples/smoke-test.mjs') {
+        throw new Error(`[main] unexpected example in tarball: ${file}`);
+      }
+      continue;
+    }
     if (!MAIN_TARBALL_ALLOWLIST.has(file)) {
       throw new Error(`[main] unexpected: ${file}`);
     }

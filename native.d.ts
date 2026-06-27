@@ -55,6 +55,8 @@ export interface QuoteOptionsJs {
   bank?: string
 }
 
+export declare function randomBytes(count: number): Promise<Buffer>
+
 export declare function readEkCertificate(): Promise<Buffer | null>
 
 export declare function readPublic(handle: string): Promise<ReadPublicJs>

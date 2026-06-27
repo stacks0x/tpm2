@@ -4,14 +4,11 @@ use crate::tbs::error::{check_tpm_rc, TpmOpError, TpmResult};
 use crate::tbs::keys::{create_storage_primary, load_ak, AkBlob};
 use crate::tbs::parse::parameters_after_rc;
 use crate::tbs::pcr::{pcr_selection_list, PcrBank};
-use crate::tbs::wire::{command_with_password_session, tpm2b, u16};
+use crate::tbs::wire::{command_with_password_session, scheme_ecdsa_sha256, scheme_rsassa_sha256, tpm2b, u16};
 use crate::tbs::submit_tpm_command;
 
 const TPM_CC_QUOTE: u32 = 0x0000_0158;
-const TPM_ALG_ECDSA: u16 = 0x0018;
-const TPM_ALG_RSASSA: u16 = 0x0014;
 const TPM_ALG_NULL: u16 = 0x0010;
-const TPM_ALG_SHA256: u16 = 0x000B;
 
 pub struct QuoteResult {
     pub message: Vec<u8>,
@@ -20,10 +17,7 @@ pub struct QuoteResult {
 
 /// ECDSA + SHA256 — Linux TBS-wrapped ECC AK (explicit at Quote time).
 fn ecdsa_sha256_scheme() -> Vec<u8> {
-    let mut s = Vec::new();
-    s.extend_from_slice(&u16(TPM_ALG_ECDSA));
-    s.extend_from_slice(&u16(TPM_ALG_SHA256));
-    s
+    scheme_ecdsa_sha256()
 }
 
 /// TPM_ALG_NULL — Windows PCP RSA identity AK uses its baked-in default (RSASSA).
@@ -34,10 +28,7 @@ pub fn pcp_rsa_quote_scheme() -> Vec<u8> {
 
 /// RSASSA + SHA256 — explicit fallback if NULL scheme is rejected.
 pub fn rsassa_sha256_scheme() -> Vec<u8> {
-    let mut s = Vec::new();
-    s.extend_from_slice(&u16(TPM_ALG_RSASSA));
-    s.extend_from_slice(&u16(TPM_ALG_SHA256));
-    s
+    scheme_rsassa_sha256()
 }
 
 pub fn quote(

@@ -130,3 +130,22 @@ pub fn asym_scheme_null() -> Vec<u8> {
 pub fn kdf_scheme_null() -> Vec<u8> {
     u16(0x0010).to_vec()
 }
+
+const TPM_ALG_ECDSA: u16 = 0x0018;
+const TPM_ALG_RSASSA: u16 = 0x0014;
+
+/// TPMT_SIG_SCHEME: ECDSA + SHA256 (signing keys and Quote).
+pub fn scheme_ecdsa_sha256() -> Vec<u8> {
+    let mut s = Vec::new();
+    s.extend_from_slice(&u16(TPM_ALG_ECDSA));
+    s.extend_from_slice(&u16(TPM_ALG_SHA256));
+    s
+}
+
+/// TPMT_SIG_SCHEME: RSASSA + SHA256.
+pub fn scheme_rsassa_sha256() -> Vec<u8> {
+    let mut s = Vec::new();
+    s.extend_from_slice(&u16(TPM_ALG_RSASSA));
+    s.extend_from_slice(&u16(TPM_ALG_SHA256));
+    s
+}

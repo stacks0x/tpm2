@@ -198,10 +198,10 @@ More detail: [getting-started.md](./docs/getting-started.md) · [windows-pcp.md]
 | `tpm.nv.write(...)` | ✓ *planned* | ✓ *planned* | ✓ |
 | `tpm.attest.ekCertificate()` | ✓ | ✓ | ✓ |
 | **keys** | | | |
-| `tpm.keys.create(...)` | ✓ *planned* | ✓ *planned* | ✓ |
-| `tpm.keys.load(blob)` | ✓ *planned* | ✓ *planned* | ✓ |
-| `key.sign(digest)` | ✓ *planned* | ✓ *planned* | ✓ |
-| `key.decrypt(cipher)` | ✓ *planned* | ✓ *planned* | ✓ |
+| `tpm.keys.create(...)` | ✓ | ✓ | ✓ |
+| `tpm.keys.load(blob)` | ✓ | ✓ | ✓ |
+| `key.sign(digest)` | ✓ | ✓ | ✓ |
+| `key.decrypt(cipher)` | — *planned* | — *planned* | — *planned* |
 | **seal** | | | |
 | `tpm.seal(...)` | ✓ *planned* | ✓ *planned* | ✓ |
 | `tpm.unseal(blob)` | ✓ *planned* | ✓ *planned* | ✓ |
@@ -251,6 +251,20 @@ await tpm.pcr.read([0, 1, 7], 'sha256');   // → { 0: 'hex…', 1: 'hex…', �
 await tpm.random.bytes(32);   // Buffer from TPM2_GetRandom
 await Tpm.randomBytes(32);    // flat
 ```
+
+### Keys (device-bound signing)
+
+```javascript
+const key = await tpm.keys.create({ type: 'ecc', sign: true });
+const digest = crypto.createHash('sha256').update('payload').digest();
+const signature = await key.sign(digest);
+const saved = key.export();
+
+const reloaded = await tpm.keys.load(saved);
+await reloaded.sign(digest);
+```
+
+Flat: `Tpm.createKey()`, `Tpm.signKeyBlob({ keyBlob, digest })`. RSA `decrypt` is not yet implemented.
 
 ### Attestation
 
@@ -383,9 +397,8 @@ Subsystem namespaces not yet on `TpmHandle`. See [docs/roadmap.md](./docs/roadma
 | Namespace | Methods |
 |-----------|---------|
 | `tpm.random` | `bytes(n)` ✅ |
+| `tpm.keys` | `create`, `load`, `KeyHandle.sign` ✅ · `decrypt` planned |
 | `tpm.pcr` | `extend(index, digest)` |
-| `tpm.nv` | `read`, `write` |
-| `tpm.keys` | `create`, `load`, `KeyHandle.sign`, `KeyHandle.decrypt` |
 | `tpm.seal` | `seal`, `unseal` |
 
 ---

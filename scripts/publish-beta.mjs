@@ -51,6 +51,9 @@ const REQUIRED_EXPORTS = [
   'isAvailable',
   'activateCredential',
   'randomBytes',
+  'createKey',
+  'signKeyBlob',
+  'keyBlobPublicDer',
 ];
 
 function assertBinaryExports(nodePath) {

@@ -77,7 +77,7 @@ export declare type ActivateCredentialFlatOptions = ActivateCredentialOptions & 
   akBlob: AkBlob;
 };
 
-/** @throws {TpmError} NOT_SUPPORTED until Phase 2 */
+/** General device key creation options. */
 export declare type KeyCreateOptions = {
   type: 'ecc' | 'rsa';
   sign?: boolean;
@@ -97,7 +97,7 @@ export declare interface AkHandle {
   activateCredential(opts: ActivateCredentialOptions): Promise<Buffer>;
 }
 
-/** @throws {TpmError} NOT_SUPPORTED until Phase 2 */
+/** @throws {TpmError} NOT_SUPPORTED until RSA decrypt is implemented */
 export declare interface KeyHandle {
   export(): KeyBlob;
   sign(digest: Buffer): Promise<Buffer>;
@@ -128,9 +128,7 @@ export declare interface TpmHandle {
     write(handle: string, data: Buffer, offset?: number): Promise<void>;
   };
   keys: {
-    /** @throws {TpmError} NOT_SUPPORTED until Phase 2 */
     create(opts: KeyCreateOptions): Promise<KeyHandle>;
-    /** @throws {TpmError} NOT_SUPPORTED until Phase 2 */
     load(blob: KeyBlob): Promise<KeyHandle>;
   };
   seal: {
@@ -160,4 +158,6 @@ export declare const Tpm: {
   quote(opts: QuoteOptions): Promise<QuoteResult>;
   provisionAk(opts?: ProvisionAkOptions): Promise<ProvisionAkResult>;
   activateCredential(opts: ActivateCredentialFlatOptions): Promise<Buffer>;
+  createKey(opts?: KeyCreateOptions): Promise<{ publicKeyDer: Buffer; keyBlob: KeyBlob }>;
+  signKeyBlob(opts: { keyBlob: KeyBlob; digest: Buffer }): Promise<Buffer>;
 };

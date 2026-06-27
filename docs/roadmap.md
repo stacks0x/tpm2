@@ -121,21 +121,16 @@ Flat equivalents remain on `Tpm.*` for every operation (thin wrappers over the s
 - [x] JS: `tpm.random.bytes(n)`, `Tpm.randomBytes(n)`
 - [ ] Tests: integration on Linux + Windows VM
 
-### Phase 2 — `tpm.keys` (next)
+### Phase 2 — `tpm.keys` ✅ (this branch; decrypt deferred)
 
-**Goal:** General exportable signing keys, separate from attestation.
+**Goal:** General exportable signing keys via TBS wrapped blobs (both OSes).
 
-- Rust:
-  - `keys.create(opts)` — storage primary (deterministic template) + `Create` keyed object; return `KeyBlob` (same shape as `AkBlob` on Linux).
-  - `keys.load(blob)` — `Load` under primary; return transient handle wrapper.
-  - `key.sign(digest)` — `Sign` with appropriate scheme (ECDSA+SHA256 / RSASSA+SHA256).
-  - `key.decrypt(cipher)` — optional, RSA-OAEP or TPM-defined scheme.
-  - Windows: **TBS path only** (not PCP); blobs are portable TPM2B like Linux.
-- JS: `KeyHandle` with `export()`, `sign()`, optional `decrypt()`.
-- Tests: create → export → load → sign → verify signature offline; flush hygiene.
-- Acceptance: no persistent TPM handles; blob persists across process restarts on same TPM.
+- [x] `keys.create` / `keys.load` / `key.sign` — ECC + RSA sign keys
+- [x] Unit tests: templates, Sign command golden, option validation, HW roundtrip
+- [ ] `key.decrypt` — RSA OAEP (deferred)
+- [ ] Windows VM sign smoke
 
-### Phase 3 — `tpm.pcr.extend` (3–5 days)
+### Phase 3 — `tpm.pcr.extend` (next)
 
 **Goal:** Software measurement hook.
 

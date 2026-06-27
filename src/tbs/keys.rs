@@ -115,7 +115,7 @@ pub fn create_ak(parent: u32) -> TpmResult<AkBlob> {
 }
 
 /// Read a TPM2B as raw wire bytes (size prefix + payload) for Load/Quote round-trip.
-fn read_tpm2b_wire(parser: &mut ResponseParser) -> TpmResult<Vec<u8>> {
+pub(crate) fn read_tpm2b_wire(parser: &mut ResponseParser) -> TpmResult<Vec<u8>> {
     let size = parser.read_u16()? as usize;
     let payload = parser.read_bytes(size)?.to_vec();
     let mut wire = Vec::with_capacity(2 + size);

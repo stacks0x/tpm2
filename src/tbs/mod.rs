@@ -5,6 +5,7 @@ pub mod ak_blob;
 pub mod commands;
 pub mod credential;
 pub mod codes;
+pub mod device_keys;
 pub mod error;
 pub mod keys;
 pub mod make_credential_sw;

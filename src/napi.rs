@@ -63,6 +63,25 @@ pub struct QuoteOptionsJs {
     pub bank: Option<String>,
 }
 
+#[napi(object)]
+pub struct KeyCreateOptionsJs {
+    pub key_type: Option<String>,
+    pub sign: Option<bool>,
+    pub decrypt: Option<bool>,
+}
+
+#[napi(object)]
+pub struct KeyCreateResultJs {
+    pub public_key_der: Buffer,
+    pub key_blob: AkBlobJs,
+}
+
+#[napi(object)]
+pub struct SignKeyBlobOptionsJs {
+    pub key_blob: AkBlobJs,
+    pub digest: Buffer,
+}
+
 #[napi]
 pub async fn random_bytes(count: u32) -> Result<Buffer> {
     #[cfg(not(any(windows, target_os = "linux")))]
@@ -237,5 +256,67 @@ pub async fn activate_credential(opts: ActivateCredentialOptionsJs) -> Result<Bu
             &opts.secret,
         )?;
         Ok(Buffer::from(recovered))
+    }
+}
+
+#[napi]
+pub async fn create_key(opts: Option<KeyCreateOptionsJs>) -> Result<KeyCreateResultJs> {
+    #[cfg(not(any(windows, target_os = "linux")))]
+    {
+        return Err(TpmOpError::unavailable("TPM is not available on this platform").into());
+    }
+    #[cfg(any(windows, target_os = "linux"))]
+    {
+        let js = opts.unwrap_or(KeyCreateOptionsJs {
+            key_type: None,
+            sign: None,
+            decrypt: None,
+        });
+        let options = crate::tbs::device_keys::parse_key_create_options(
+            js.key_type.as_deref(),
+            js.sign,
+            js.decrypt,
+        )?;
+        let result = crate::tbs::device_keys::create_key(&options)?;
+        Ok(KeyCreateResultJs {
+            public_key_der: Buffer::from(result.public_key_der),
+            key_blob: AkBlobJs {
+                public: Buffer::from(result.key_blob.public),
+                private: Buffer::from(result.key_blob.private),
+            },
+        })
+    }
+}
+
+#[napi]
+pub async fn key_blob_public_der(key_blob: AkBlobJs) -> Result<Buffer> {
+    #[cfg(not(any(windows, target_os = "linux")))]
+    {
+        return Err(TpmOpError::unavailable("TPM is not available on this platform").into());
+    }
+    #[cfg(any(windows, target_os = "linux"))]
+    {
+        let blob = crate::tbs::keys::AkBlob {
+            public: key_blob.public.to_vec(),
+            private: key_blob.private.to_vec(),
+        };
+        Ok(Buffer::from(crate::tbs::device_keys::key_blob_spki(&blob)?))
+    }
+}
+
+#[napi]
+pub async fn sign_key_blob(opts: SignKeyBlobOptionsJs) -> Result<Buffer> {
+    #[cfg(not(any(windows, target_os = "linux")))]
+    {
+        return Err(TpmOpError::unavailable("TPM is not available on this platform").into());
+    }
+    #[cfg(any(windows, target_os = "linux"))]
+    {
+        let blob = crate::tbs::keys::AkBlob {
+            public: opts.key_blob.public.to_vec(),
+            private: opts.key_blob.private.to_vec(),
+        };
+        let sig = crate::tbs::device_keys::sign_with_key_blob(&blob, &opts.digest)?;
+        Ok(Buffer::from(sig))
     }
 }

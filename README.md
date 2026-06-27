@@ -32,6 +32,151 @@ Node **20+**. One prebuilt `.node` per platform via optional dependencies.
 
 ---
 
+## Examples
+
+### Check the TPM
+
+```javascript
+import { Tpm } from 'node-tpm2';
+
+if (!(await Tpm.isAvailable())) {
+  console.log('No TPM or no access');
+  process.exit(1);
+}
+
+const info = await Tpm.info();
+console.log(info.manufacturer, info.firmwareVersion, info.isVirtual ? '(virtual)' : '');
+```
+
+### Device attestation (dev / same-user)
+
+Provision a user-scoped attestation key, quote PCRs bound to a server challenge, send `message` + `signature` + `akPublicDer` to your verifier.
+
+```javascript
+import { Tpm } from 'node-tpm2';
+import { writeFileSync } from 'node:fs';
+
+const challenge = Buffer.from('server-issued-nonce-or-session-id');
+
+const { akPublicDer, akBlob } = await Tpm.provisionAk();
+writeFileSync('ak.blob.json', JSON.stringify({
+  public: akBlob.public.toString('base64'),
+  private: akBlob.private.toString('base64'),
+}));
+
+const { message, signature } = await Tpm.quote({
+  akBlob,
+  pcrSelection: [0, 1, 7],
+  qualifyingData: challenge,
+});
+
+// → POST { akPublicDer, message, signature, pcrSelection } to your backend
+```
+
+### Handle style (grouped API)
+
+```javascript
+import { Tpm } from 'node-tpm2';
+
+await using tpm = await Tpm.open();
+
+const pcrs = await tpm.pcr.read([0, 1, 7]);
+const ekCert = await tpm.attest.ekCertificate();   // Buffer | null
+
+const ak = await tpm.attest.provisionAk();
+const quote = await ak.quote({
+  pcrSelection: [0, 1, 7],
+  qualifyingData: Buffer.from('challenge'),
+});
+
+const saved = ak.export();   // persist { public, private } for next session
+```
+
+### Windows fleet enrollment
+
+**Once** at install time (Admin or SYSTEM): create a machine-scoped key with a stable name and persist the blob.
+
+```javascript
+import { Tpm } from 'node-tpm2';
+import { writeFileSync } from 'node:fs';
+
+// Run elevated or as SYSTEM — see docs/windows-pcp.md
+const { akPublicDer, akBlob } = await Tpm.provisionAk({
+  keyName: 'my-app-device-ak',
+  scope: 'machine',
+  overwrite: true,
+});
+
+writeFileSync('C:\\ProgramData\\my-app\\ak.blob.json', JSON.stringify({
+  public: akBlob.public.toString('base64'),
+  private: akBlob.private.toString('base64'),
+}));
+// Register akPublicDer + creation data with your enrollment service
+```
+
+**Every runtime session** (standard user): load the blob and quote — no elevation.
+
+```javascript
+import { Tpm } from 'node-tpm2';
+import { readFileSync } from 'node:fs';
+
+const raw = JSON.parse(readFileSync('C:\\ProgramData\\my-app\\ak.blob.json', 'utf8'));
+const akBlob = {
+  public: Buffer.from(raw.public, 'base64'),
+  private: Buffer.from(raw.private, 'base64'),
+};
+
+const quote = await Tpm.quote({
+  akBlob,
+  pcrSelection: [0, 1, 7],
+  qualifyingData: Buffer.from('runtime-challenge'),
+});
+```
+
+### Read PCRs and TPM objects
+
+```javascript
+import { Tpm } from 'node-tpm2';
+
+await using tpm = await Tpm.open();
+
+const digests = await tpm.pcr.read([0, 1, 7]);           // { 0: 'abc…', … }
+const ek = await tpm.readPublic('0x81010001');           // endorsement key
+const { publicKeyDer, name } = ek;
+```
+
+### Credential activation (enrollment proof-of-possession)
+
+```javascript
+import { Tpm } from 'node-tpm2';
+
+// credentialBlob + secret from your verifier's MakeCredential step
+const recovered = await Tpm.activateCredential({
+  akBlob,
+  credentialBlob,
+  secret,
+});
+// recovered → proves AK is on the TPM that owns the EK
+```
+
+### Errors
+
+```javascript
+import { Tpm, TpmError } from 'node-tpm2';
+
+try {
+  await Tpm.provisionAk({ scope: 'machine', keyName: 'fleet-ak' });
+} catch (err) {
+  if (err instanceof TpmError && err.code === 'REQUIRES_ELEVATION') {
+    // Windows: run enrollment elevated or as SYSTEM, not at runtime
+  }
+}
+```
+
+More detail: [getting-started.md](./docs/getting-started.md) · [windows-pcp.md](./docs/windows-pcp.md)
+
+---
+
 ## Privilege matrix
 
 **Legend:** ✓ standard user (with normal TPM access) · ✗ needs elevation · — not applicable · \* policy/firmware may block

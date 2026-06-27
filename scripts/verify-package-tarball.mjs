@@ -21,6 +21,7 @@ export const MAIN_TARBALL_ALLOWLIST = new Set([
   'native.d.ts',
   'docs/getting-started.md',
   'docs/windows-pcp.md',
+  'docs/roadmap.md',
 ]);
 
 const SOURCE_FORBIDDEN = [

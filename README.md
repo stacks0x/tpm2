@@ -1,61 +1,26 @@
 # node-tpm2
 
-**TPM 2.0 attestation for Node.js** — prebuilt native bindings, no `tpm2-tools`, no `tpm2-tss`, no Rust toolchain at install time.
+Native TPM 2.0 for Node.js. Prebuilt binaries — no `tpm2-tools`, no `tpm2-tss`, no Rust at install time.
 
-Use the TPM your OS already exposes: **TBS + Platform Crypto Provider** on Windows, **`/dev/tpmrm0`** on Linux. One small API for PCR reads, attestation key provisioning, quotes, and credential activation.
+Talks to the TPM through OS-native paths: **TBS + Platform Crypto Provider** on Windows, **`/dev/tpmrm0`** on Linux. Returns buffers and typed records, not CLI text.
 
 ```javascript
 import { Tpm } from 'node-tpm2';
 
-const tpm = await Tpm.open();
+if (!(await Tpm.isAvailable())) throw new Error('No TPM');
 
-const { akPublicDer, akBlob } = await tpm.attest.provisionAk();
-const quote = await tpm.attest.quote({
-  akBlob,
+await using tpm = await Tpm.open();
+
+const ak = await tpm.attest.provisionAk();
+const { message, signature } = await ak.quote({
   pcrSelection: [0, 1, 7],
-  qualifyingData: Buffer.from('your-challenge-nonce'),
+  qualifyingData: Buffer.from('challenge-nonce'),
 });
-
-// quote.message + quote.signature → send to your verifier
 ```
 
-## Why node-tpm2
+**Pre-release** (`0.0.x-beta`). [Roadmap](./docs/roadmap.md) for remaining namespaces.
 
-| | node-tpm2 | Shelling out to tpm2-tools |
-|---|-----------|----------------------------|
-| Install | `npm install` + prebuilt `.node` | OS packages, PATH, version drift |
-| API | Async JavaScript, structured errors | Parse CLI output |
-| Windows fleet | Machine-scoped PCP keys, cross-user quote | PCP/NCrypt scripting pain |
-| AK persistence | Wrapped blob (`akBlob`) — no persistent TPM handles in your app | Handle bookkeeping |
-
-**Use it when you need:**
-
-- **Device attestation** — prove boot/software state via PCR quotes bound to a challenge nonce
-- **Fleet enrollment** — provision a machine-scoped attestation key at install time (Intune, SCCM, GPO); quote at runtime as the logged-in user
-- **Remote verification** — export AK public key (SPKI DER) and quote blobs to your backend; verify with standard TPM quote rules
-- **EK-backed onboarding** — read the EK certificate, activate credentials during enrollment
-
-## How it works
-
-```
-┌─────────────────────────────────────────────────────────┐
-│  Your Node app (Tpm.open / flat helpers)                │
-└──────────────────────────┬──────────────────────────────┘
-                           │
-┌──────────────────────────▼──────────────────────────────┐
-│  node-tpm2 (napi-rs) — command build, sessions, blobs   │
-└──────────────┬─────────────────────────┬────────────────┘
-               │                         │
-     Linux     │                         │  Windows
-               ▼                         ▼
-        /dev/tpmrm0              TBS + NCrypt PCP
-        ECDSA P-256 AK           RSA-2048 persisted AK
-        TPM2B wrapped blob       PCP1 (user) / PCP2 (machine)
-```
-
-- **No persistent TPM handles in your process.** You keep an `akBlob` (portable wrapped key material). Each operation loads transiently, signs, and flushes.
-- **Platform-native AK formats.** Linux uses ECDSA P-256 TPM2B blobs; Windows uses Microsoft PCP (`PCP1` user / `PCP2` machine). Verifiers should accept both.
-- **Structured errors.** Failures throw `TpmError` with stable `code`, optional `suggestion`, `tpmRc` (TPM return code), and `hresult` (Windows NCrypt).
+---
 
 ## Install
 
@@ -63,102 +28,177 @@ const quote = await tpm.attest.quote({
 npm install node-tpm2
 ```
 
-Node **20+**. npm installs a prebuilt native binary for your OS/arch via optional platform packages.
+Node **20+**. One prebuilt `.node` per platform via optional dependencies.
 
-## API at a glance
+---
 
-**Handle style** (grouped operations):
+## Privilege matrix
+
+**Legend:** ✓ standard user (with normal TPM access) · ✗ needs elevation · — not applicable · \* policy/firmware may block
+
+| API | Linux standard user | Windows standard user | Windows Admin / SYSTEM |
+|-----|:-------------------:|:---------------------:|:----------------------:|
+| **Root** | | | |
+| `Tpm.isAvailable()` | ✓ | ✓ | ✓ |
+| `Tpm.open()` | ✓ | ✓ | ✓ |
+| `tpm.info()` | ✓ | ✓ | ✓ |
+| `tpm.readPublic(handle)` | ✓ | ✓ | ✓ |
+| **random** | | | |
+| `tpm.random.bytes(n)` | ✓ *planned* | ✓ *planned* | ✓ |
+| **pcr** | | | |
+| `tpm.pcr.read(...)` | ✓ | ✓ | ✓ |
+| `tpm.pcr.extend(i, digest)` | ✓ *planned* | ✓ *planned* | ✓ |
+| **nv** | | | |
+| `tpm.nv.read(...)` | ✓ *planned* | ✓ *planned* | ✓ |
+| `tpm.nv.write(...)` | ✓ *planned* | ✓ *planned* | ✓ |
+| `tpm.attest.ekCertificate()` | ✓ | ✓ | ✓ |
+| **keys** | | | |
+| `tpm.keys.create(...)` | ✓ *planned* | ✓ *planned* | ✓ |
+| `tpm.keys.load(blob)` | ✓ *planned* | ✓ *planned* | ✓ |
+| `key.sign(digest)` | ✓ *planned* | ✓ *planned* | ✓ |
+| `key.decrypt(cipher)` | ✓ *planned* | ✓ *planned* | ✓ |
+| **seal** | | | |
+| `tpm.seal(...)` | ✓ *planned* | ✓ *planned* | ✓ |
+| `tpm.unseal(blob)` | ✓ *planned* | ✓ *planned* | ✓ |
+| **attest** | | | |
+| `tpm.attest.provisionAk()` user | ✓ | ✓ | ✓ |
+| `tpm.attest.provisionAk({ scope: 'machine' })` | — | ✗ | ✓ |
+| `ak.quote(...)` / `Tpm.quote(...)` | ✓ | ✓ | ✓ |
+| `ak.activateCredential(...)` | ✓ | ✗ | ✓ |
+
+**Linux standard user** requires read/write on `/dev/tpmrm0` (commonly the `tss` group). That is a one-time deploy permission, not root for every call.
+
+**Windows fleet pattern:** provision machine AK elevated or as SYSTEM once → persist `akBlob` → standard users quote forever after. See [docs/windows-pcp.md](./docs/windows-pcp.md).
+
+**Planned rows** are design targets from the [roadmap](./docs/roadmap.md); unprivileged use matches the Phase 0 spike (`GetRandom`, `CreatePrimary` succeeded on Windows 11 without admin). Firmware or group policy can still deny specific PCR/NV operations — those surface as `TPM_RC` or `COMMAND_BLOCKED`, not silent failure.
+
+---
+
+## API reference (shipped)
+
+Import: `import { Tpm, TpmError } from 'node-tpm2'`
+
+All flat methods also exist on `Tpm.*` (e.g. `Tpm.pcrRead` ≡ `tpm.pcr.read`).
+
+### Availability
 
 ```javascript
-const tpm = await Tpm.open();
-
-await tpm.info();                          // manufacturer, firmware, virtual-TPM hint
-await tpm.pcr.read([0, 1, 7]);             // SHA-256 PCR digests
-await tpm.attest.ekCertificate();          // EK cert from NV, or null
-
-const ak = await tpm.attest.provisionAk();   // returns AkHandle
-await ak.quote({ pcrSelection: [7], qualifyingData: nonce });
-await ak.export();                           // persist akBlob
-await ak.activateCredential({ credentialBlob, secret });
-
-await using tpm = await Tpm.open();        // Symbol.asyncDispose when done
+await Tpm.isAvailable();              // boolean, never throws
+await Tpm.info();                     // { manufacturer, firmwareVersion, isVirtual, spec }
 ```
 
-**Flat style** (same operations, functional entry points):
+### Handle
 
 ```javascript
-await Tpm.isAvailable();
-await Tpm.provisionAk({ keyName: 'my-app-ak' });
-await Tpm.quote({ akBlob, pcrSelection: [0], qualifyingData: nonce });
+await using tpm = await Tpm.open();
+await tpm.readPublic('0x81000001');   // → { publicKeyDer, name }
+```
+
+### PCR
+
+```javascript
+await tpm.pcr.read([0, 1, 7], 'sha256');   // → { 0: 'hex…', 1: 'hex…', … }
+```
+
+### Attestation
+
+```javascript
+const ak = await tpm.attest.provisionAk({
+  keyName: 'my-app-device-ak',    // Windows: required for machine scope
+  scope: 'machine',               // Windows: 'user' | 'machine'
+  overwrite: true,
+});
+
+const akBlob = ak.export();         // { public, private }
+await ak.quote({ pcrSelection: [0, 1, 7], qualifyingData: Buffer.from('nonce') });
+await tpm.attest.ekCertificate();   // Buffer | null
+await ak.activateCredential({ credentialBlob, secret });
+```
+
+### Flat equivalents
+
+```javascript
 await Tpm.pcrRead([0, 1, 7]);
+await Tpm.readPublic('0x81010001');
 await Tpm.readEkCertificate();
+await Tpm.provisionAk({ scope: 'user' });
+await Tpm.quote({ akBlob, pcrSelection: [7], qualifyingData: nonce });
 await Tpm.activateCredential({ akBlob, credentialBlob, secret });
 ```
 
-Errors:
+### Types
+
+```typescript
+type AkBlob = { public: Buffer; private: Buffer };
+
+type ProvisionAkOptions = {
+  keyName?: string;
+  scope?: 'user' | 'machine';
+  overwrite?: boolean;
+};
+
+type QuoteOptions = {
+  akBlob: AkBlob;
+  pcrSelection: number[];
+  qualifyingData: Buffer;
+  bank?: 'sha256';
+};
+```
+
+### Errors
 
 ```javascript
-try {
-  await Tpm.provisionAk({ scope: 'machine', keyName: 'fleet-ak' });
-} catch (err) {
-  if (err.code === 'REQUIRES_ELEVATION') {
-    // Windows: machine keys need Admin/SYSTEM at provision time only
+catch (err) {
+  if (err instanceof TpmError) {
+    err.code;        // REQUIRES_ELEVATION | TPM_RC | ACCESS_DENIED | …
+    err.tpmRc;       // TPM return code
+    err.hresult;     // Windows NCrypt
+    err.suggestion;
   }
 }
 ```
 
-Full reference: [docs/getting-started.md](./docs/getting-started.md) · Windows fleet: [docs/windows-pcp.md](./docs/windows-pcp.md)
+---
 
-## Privileges (honest summary)
+## API reference (planned)
 
-There is **no separate TPM daemon to install**, but the OS still controls access:
+Subsystem namespaces not yet on `TpmHandle`. See [docs/roadmap.md](./docs/roadmap.md) for phases and acceptance criteria.
 
-| | Linux | Windows |
-|---|-------|---------|
-| **Typical runtime** (quote, PCR read) | User in `tss` group (or equivalent access to `/dev/tpmrm0`) | Standard user — no elevation |
-| **User-scoped AK** (`provisionAk()`) | Same as runtime | Standard user |
-| **Machine-scoped AK** (`scope: 'machine'`) | N/A | **Admin or SYSTEM at enrollment** — then standard users quote with the saved blob |
-| **Credential activation** | TPM policy dependent | Elevated / SYSTEM |
+| Namespace | Methods |
+|-----------|---------|
+| `tpm.random` | `bytes(n)` |
+| `tpm.pcr` | `extend(index, digest)` |
+| `tpm.nv` | `read`, `write` |
+| `tpm.keys` | `create`, `load`, `KeyHandle.sign`, `KeyHandle.decrypt` |
+| `tpm.seal` | `seal`, `unseal` |
 
-**Fleet pattern:** installer runs once elevated (or as SYSTEM) → saves `akBlob` → app quotes unprivileged forever after. See [docs/windows-pcp.md](./docs/windows-pcp.md).
+---
 
-## Validate your install
-
-```bash
-npm ls node-tpm2
-node node_modules/node-tpm2/examples/smoke-test.mjs runtime
-```
-
-Windows fleet smoke (elevated provision, then standard-user quote):
-
-```bash
-node node_modules/node-tpm2/examples/smoke-test.mjs provision-machine --key-name my-app-device-ak --out ak.blob.json
-node node_modules/node-tpm2/examples/smoke-test.mjs quote --in ak.blob.json
-```
-
-Use paths under `node_modules/node-tpm2/` after `npm install` (not `examples/` at the project root).
-
-## Platform support
+## Platforms
 
 | Platform | Status | Attestation key |
 |----------|--------|-----------------|
-| Linux (glibc/musl, x64/arm64) | Supported | ECDSA P-256 TPM2B |
-| Windows (x64/arm64) | Supported | RSA-2048 PCP |
-| macOS | Not supported (`isAvailable()` → false) | — |
+| Linux x64/arm64 gnu/musl | Supported | ECDSA P-256 TPM2B |
+| Windows x64/arm64 | Supported | RSA-2048 PCP |
+| macOS | Unavailable | `isAvailable()` → `false` |
 
-## Development
+---
+
+## Contributing
 
 ```bash
 git clone https://github.com/stacks0x/tpm2.git && cd tpm2
 npm install && npm run build
+cargo test --lib
+npm run verify:package
 node examples/smoke-test.mjs runtime
 ```
 
-Rust probe for low-level validation (repo only, **not** published to npm):
+Docs: [getting-started.md](./docs/getting-started.md) · [windows-pcp.md](./docs/windows-pcp.md) · [roadmap.md](./docs/roadmap.md)
 
-```powershell
-cargo run --no-default-features --features probe-bin --bin tbs-probe -- all
-```
+Low-level Rust validation: `cargo run --no-default-features --features probe-bin --bin tbs-probe --` (repo only, not published to npm).
+
+---
 
 ## License
 

@@ -47,6 +47,7 @@ const REQUIRED_EXPORTS = [
   'provisionAk',
   'quote',
   'pcrRead',
+  'pcrExtend',
   'getFixedProperties',
   'isAvailable',
   'activateCredential',

@@ -147,8 +147,11 @@ function createTpmHandle() {
         return native.pcrRead(selection, bank);
       }),
 
-      /** Extend a PCR digest. Not yet implemented. */
-      extend: notSupported('tpm.pcr.extend'),
+      /** Extend a PCR digest in the SHA-256 bank. */
+      extend: wrapNative(async (index, digest) => {
+        requireNative('pcrExtend');
+        await native.pcrExtend(index, digest);
+      }),
     },
 
     random: {
@@ -285,6 +288,12 @@ export const Tpm = {
   pcrRead: wrapNative(async (selection, bank) => {
     requireNative('pcrRead');
     return native.pcrRead(selection, bank);
+  }),
+
+  /** Flat native binding: PCR extend. Prefer `tpm.pcr.extend` on an open handle. */
+  pcrExtend: wrapNative(async (index, digest) => {
+    requireNative('pcrExtend');
+    await native.pcrExtend(index, digest);
   }),
 
   /** Flat native binding: ReadPublic. */

@@ -18,7 +18,7 @@ const TPM_ALG_ECC: u16 = 0x0023;
 const TPM_ALG_RSA: u16 = 0x0001;
 const TPM_ALG_SHA256: u16 = 0x000B;
 const TPM_ECC_NIST_P256: u16 = 0x0003;
-const TPM_ST_HASHCHECK: u16 = 0x8029;
+const TPM_ST_HASHCHECK: u16 = 0x8024;
 const TPM_RH_NULL: u32 = 0x4000_0007;
 
 /// fixedTPM | fixedParent | sensitiveDataOrigin | userWithAuth | sign
@@ -149,7 +149,9 @@ fn create_key_under_parent(parent: u32, opts: &KeyCreateOptions) -> TpmResult<Ak
     Ok(AkBlob { public, private })
 }
 
-fn null_hash_validation_ticket() -> Vec<u8> {
+fn external_digest_validation_ticket() -> Vec<u8> {
+    // Unrestricted signing keys: TPM_ST_HASHCHECK + TPM_RH_NULL + empty digest
+    // (Part 3 Sign; same as tpm2_sign -d without -t).
     let mut t = Vec::new();
     t.extend_from_slice(&u16(TPM_ST_HASHCHECK));
     t.extend_from_slice(&u32(TPM_RH_NULL));
@@ -165,7 +167,8 @@ pub fn sign_digest(sign_handle: u32, digest: &[u8]) -> TpmResult<Vec<u8>> {
     }
     let mut params = Vec::new();
     params.extend(tpm2b(digest));
-    params.extend(null_hash_validation_ticket());
+    params.extend(asym_scheme_null()); // inScheme: use key default
+    params.extend(external_digest_validation_ticket());
 
     let cmd = command_with_password_session(sign_handle, TPM_CC_SIGN, &params);
     let resp = submit_tpm_command(&cmd).map_err(TpmOpError::transport)?;
@@ -250,12 +253,22 @@ mod tests {
 
     #[test]
     fn sign_command_uses_sessions_tag() {
+        let digest = [0u8; 32];
         let mut params = Vec::new();
-        params.extend(tpm2b(&[0u8; 32]));
-        params.extend(null_hash_validation_ticket());
+        params.extend(tpm2b(&digest));
+        params.extend(asym_scheme_null());
+        params.extend(external_digest_validation_ticket());
         let cmd = command_with_password_session(0x80FF_FFFF, TPM_CC_SIGN, &params);
         assert_eq!(&cmd[0..2], &[0x80, 0x02]);
         assert_eq!(&cmd[6..10], &TPM_CC_SIGN.to_be_bytes());
+    }
+
+    #[test]
+    fn external_digest_validation_ticket_is_hashcheck_null_empty() {
+        let ticket = external_digest_validation_ticket();
+        assert_eq!(&ticket[0..2], &TPM_ST_HASHCHECK.to_be_bytes());
+        assert_eq!(&ticket[2..6], &TPM_RH_NULL.to_be_bytes());
+        assert_eq!(&ticket[6..8], &0u16.to_be_bytes()); // empty TPM2B_DIGEST
     }
 
     #[test]

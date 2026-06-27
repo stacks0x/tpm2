@@ -115,7 +115,6 @@ export declare interface TpmHandle {
   info(): Promise<TpmInfo>;
   pcr: {
     read(selection: number[], bank?: 'sha256'): Promise<Record<number, string>>;
-    /** @throws {TpmError} NOT_SUPPORTED until Phase 3 */
     extend(index: number, digest: Buffer): Promise<void>;
   };
   random: {
@@ -153,6 +152,7 @@ export declare const Tpm: {
   info(): Promise<TpmInfo>;
   randomBytes(count: number): Promise<Buffer>;
   pcrRead(selection: number[], bank?: 'sha256'): Promise<Record<number, string>>;
+  pcrExtend(index: number, digest: Buffer): Promise<void>;
   readPublic(handle: string): Promise<ReadPublicResult>;
   readEkCertificate(): Promise<Buffer | null>;
   quote(opts: QuoteOptions): Promise<QuoteResult>;

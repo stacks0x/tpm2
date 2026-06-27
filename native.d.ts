@@ -13,6 +13,8 @@ export interface AkBlobJs {
   private: Buffer
 }
 
+export declare function createKey(opts?: KeyCreateOptionsJs | undefined | null): Promise<KeyCreateResultJs>
+
 export interface FixedPropertiesJs {
   manufacturer: string
   firmwareVersion: string
@@ -23,6 +25,21 @@ export interface FixedPropertiesJs {
 export declare function getFixedProperties(): Promise<FixedPropertiesJs>
 
 export declare function isAvailable(): Promise<boolean>
+
+export declare function keyBlobPublicDer(keyBlob: AkBlobJs): Promise<Buffer>
+
+export interface KeyCreateOptionsJs {
+  keyType?: string
+  sign?: boolean
+  decrypt?: boolean
+}
+
+export interface KeyCreateResultJs {
+  publicKeyDer: Buffer
+  keyBlob: AkBlobJs
+}
+
+export declare function pcrExtend(index: number, digest: Buffer): Promise<void>
 
 export declare function pcrRead(selection: Array<number>, bank?: string | undefined | null): Promise<Record<string, string>>
 
@@ -64,4 +81,11 @@ export declare function readPublic(handle: string): Promise<ReadPublicJs>
 export interface ReadPublicJs {
   publicKeyDer: Buffer
   name: Buffer
+}
+
+export declare function signKeyBlob(opts: SignKeyBlobOptionsJs): Promise<Buffer>
+
+export interface SignKeyBlobOptionsJs {
+  keyBlob: AkBlobJs
+  digest: Buffer
 }

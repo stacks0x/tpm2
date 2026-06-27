@@ -20,6 +20,7 @@ export const MAIN_TARBALL_ALLOWLIST = new Set([
   'native.cjs',
   'native.d.ts',
   'docs/getting-started.md',
+  'docs/api-reference.md',
   'docs/windows-pcp.md',
   'docs/roadmap.md',
 ]);

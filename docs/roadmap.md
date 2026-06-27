@@ -16,10 +16,10 @@ or depends on downstream products.
 | Namespace | Methods |
 |-----------|---------|
 | Root | `Tpm.isAvailable()`, `Tpm.open()`, `Tpm.info()` |
-| `tpm.pcr` | `read` |
+| `tpm.pcr` | `read`, `extend` |
 | `tpm.attest` | `provisionAk`, `quote`, `ekCertificate` |
 | `AkHandle` | `export`, `quote`, `activateCredential`, `publicKeyDer` |
-| Flat | `Tpm.pcrRead`, `readPublic`, `readEkCertificate`, `quote`, `provisionAk`, `activateCredential` |
+| Flat | `Tpm.pcrRead`, `Tpm.pcrExtend`, `readPublic`, `readEkCertificate`, `quote`, `provisionAk`, `activateCredential` |
 
 **Rust foundation already present (not exposed on `TpmHandle` yet):**
 
@@ -130,15 +130,15 @@ Flat equivalents remain on `Tpm.*` for every operation (thin wrappers over the s
 - [ ] `key.decrypt` — RSA OAEP (deferred)
 - [ ] Windows VM sign smoke
 
-### Phase 3 — `tpm.pcr.extend` (next)
+### Phase 3 — `tpm.pcr.extend` ✅ (this branch)
 
 **Goal:** Software measurement hook.
 
-- Rust: `TPM2_PCR_Extend` with SHA-256 bank selection matching `pcr.read`.
-- JS: `tpm.pcr.extend(index, digest)`.
-- Tests: extend → read → digest changed.
-- Caveats: some firmware policies lock PCRs; surface `TPM_RC` / `COMMAND_BLOCKED` cleanly.
-- Acceptance: works unprivileged on swtpm and dev VM where PCRs are extendable.
+- [x] Rust: `TPM2_PCR_Extend` with SHA-256 bank selection matching `pcr.read`.
+- [x] JS: `tpm.pcr.extend(index, digest)`.
+- [x] Tests: extend → read → digest changed.
+- [x] Caveats: some firmware policies lock PCRs; surface `TPM_RC` / `COMMAND_BLOCKED` cleanly.
+- [ ] Acceptance: works unprivileged on swtpm and dev VM where PCRs are extendable.
 
 ### Phase 4 — `tpm.nv` (1 week)
 

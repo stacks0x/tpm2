@@ -130,6 +130,19 @@ pub async fn get_fixed_properties() -> Result<FixedPropertiesJs> {
 }
 
 #[napi]
+pub async fn pcr_extend(index: u32, digest: Buffer) -> Result<()> {
+    #[cfg(not(any(windows, target_os = "linux")))]
+    {
+        return Err(TpmOpError::unavailable("TPM is not available on this platform").into());
+    }
+    #[cfg(any(windows, target_os = "linux"))]
+    {
+        crate::tbs::pcr::pcr_extend(index, &digest)?;
+        Ok(())
+    }
+}
+
+#[napi]
 pub async fn pcr_read(selection: Vec<u32>, bank: Option<String>) -> Result<HashMap<String, String>> {
     #[cfg(not(any(windows, target_os = "linux")))]
     {

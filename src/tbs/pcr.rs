@@ -1,15 +1,17 @@
-//! TPM2_PCR_Read — SHA-256 bank by default.
+//! TPM2 PCR commands — SHA-256 bank by default.
 
 use std::collections::HashMap;
 
 use crate::tbs::error::{check_tpm_rc, TpmOpError, TpmResult};
 use crate::tbs::parse::{hex_encode, read_pml_digest, read_pml_pcr_selection, ResponseParser};
-use crate::tbs::wire::{command, u16, u32};
+use crate::tbs::wire::{command, command_with_password_session, u16, u32};
 use crate::tbs::submit_tpm_command;
 
 const TPM_ST_NO_SESSIONS: u16 = 0x8001;
 const TPM_CC_PCR_READ: u32 = 0x0000_017E;
+const TPM_CC_PCR_EXTEND: u32 = 0x0000_0182;
 const TPM_ALG_SHA256: u16 = 0x000B;
+const SHA256_DIGEST_LEN: usize = 32;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PcrBank {
@@ -83,6 +85,34 @@ pub fn pcr_read(selection: &[u32], bank: PcrBank) -> TpmResult<HashMap<u32, Stri
     Ok(out)
 }
 
+fn digest_values_sha256(digest: &[u8]) -> Vec<u8> {
+    let mut out = Vec::new();
+    out.extend_from_slice(&u32(1));
+    out.extend_from_slice(&u16(TPM_ALG_SHA256));
+    out.extend_from_slice(digest);
+    out
+}
+
+pub fn pcr_extend(index: u32, digest: &[u8]) -> TpmResult<()> {
+    if index >= 24 {
+        return Err(TpmOpError::invalid_argument(format!(
+            "PCR index must be 0–23, got {index}"
+        )));
+    }
+    if digest.len() != SHA256_DIGEST_LEN {
+        return Err(TpmOpError::invalid_argument(format!(
+            "SHA-256 PCR digest must be {SHA256_DIGEST_LEN} bytes, got {}",
+            digest.len()
+        )));
+    }
+
+    let params = digest_values_sha256(digest);
+    let cmd = command_with_password_session(index, TPM_CC_PCR_EXTEND, &params);
+    let resp = submit_tpm_command(&cmd).map_err(TpmOpError::transport)?;
+    check_tpm_rc(&resp, "PCR_Extend")?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -96,6 +126,35 @@ mod tests {
         assert_eq!(&cmd[6..10], &[0x00, 0x00, 0x01, 0x7E]);
     }
 
+    #[test]
+    fn pcr_extend_command_golden_prefix() {
+        let digest = [0xABu8; SHA256_DIGEST_LEN];
+        let params = digest_values_sha256(&digest);
+        let cmd = command_with_password_session(7, TPM_CC_PCR_EXTEND, &params);
+        assert_eq!(cmd.len(), 65);
+        assert_eq!(&cmd[0..2], &[0x80, 0x02]);
+        assert_eq!(&cmd[6..10], &[0x00, 0x00, 0x01, 0x82]);
+        assert_eq!(&cmd[10..14], &7u32.to_be_bytes());
+        assert_eq!(&cmd[14..18], &9u32.to_be_bytes());
+        assert_eq!(&cmd[18..27], &[0x40, 0x00, 0x00, 0x09, 0x00, 0x00, 0x01, 0x00, 0x00]);
+        assert_eq!(&cmd[27..31], &1u32.to_be_bytes());
+        assert_eq!(&cmd[31..33], &TPM_ALG_SHA256.to_be_bytes());
+        assert_eq!(&cmd[33..65], &digest);
+    }
+
+    #[test]
+    fn pcr_extend_rejects_bad_index() {
+        let digest = [0u8; SHA256_DIGEST_LEN];
+        let err = pcr_extend(24, &digest).unwrap_err();
+        assert!(matches!(err, TpmOpError::InvalidArgument { .. }));
+    }
+
+    #[test]
+    fn pcr_extend_rejects_bad_digest_length() {
+        let err = pcr_extend(7, &[0u8; 16]).unwrap_err();
+        assert!(matches!(err, TpmOpError::InvalidArgument { .. }));
+    }
+
     #[cfg(target_os = "linux")]
     #[test]
     fn linux_pcr_read_roundtrip() {
@@ -107,6 +166,48 @@ mod tests {
             let digest = pcrs.get(&idx).expect("pcr digest");
             assert_eq!(digest.len(), 64, "SHA-256 PCR digest is 32 bytes hex");
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_pcr_extend_roundtrip() {
+        use sha2::{Digest, Sha256};
+
+        if !crate::tbs::hw_test::enabled() {
+            return;
+        }
+
+        let idx = 7u32;
+        let before = pcr_read(&[idx], PcrBank::Sha256)
+            .expect("pcr_read before")
+            .get(&idx)
+            .expect("pcr 7")
+            .clone();
+
+        let measurement = b"measurement";
+        let extend_digest = Sha256::digest(measurement);
+        pcr_extend(idx, &extend_digest).expect("pcr_extend");
+
+        let after = pcr_read(&[idx], PcrBank::Sha256)
+            .expect("pcr_read after")
+            .get(&idx)
+            .expect("pcr 7")
+            .clone();
+
+        assert_ne!(before, after, "PCR digest should change after extend");
+
+        let prior: Vec<u8> = before
+            .as_bytes()
+            .chunks(2)
+            .map(|pair| {
+                u8::from_str_radix(std::str::from_utf8(pair).expect("hex pair"), 16)
+                    .expect("hex byte")
+            })
+            .collect();
+        let mut extended = prior;
+        extended.extend_from_slice(&extend_digest);
+        let expected = hex_encode(&Sha256::digest(&extended));
+        assert_eq!(after, expected, "PCR extend should follow SHA-256 bank formula");
     }
 
     #[test]

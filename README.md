@@ -173,7 +173,7 @@ try {
 }
 ```
 
-More detail: [getting-started.md](./docs/getting-started.md) · [windows-pcp.md](./docs/windows-pcp.md) · [Error reference](#error-reference)
+More detail: [getting-started.md](./docs/getting-started.md) · [api-reference.md](./docs/api-reference.md) · [windows-pcp.md](./docs/windows-pcp.md) · [Error reference](#error-reference)
 
 ---
 
@@ -192,7 +192,7 @@ More detail: [getting-started.md](./docs/getting-started.md) · [windows-pcp.md]
 | `tpm.random.bytes(n)` | ✓ | ✓ | ✓ |
 | **pcr** | | | |
 | `tpm.pcr.read(...)` | ✓ | ✓ | ✓ |
-| `tpm.pcr.extend(i, digest)` | ✓ *planned* | ✓ *planned* | ✓ |
+| `tpm.pcr.extend(i, digest)` | ✓ * | ✓ * | ✓ |
 | **nv** | | | |
 | `tpm.nv.read(...)` | ✓ *planned* | ✓ *planned* | ✓ |
 | `tpm.nv.write(...)` | ✓ *planned* | ✓ *planned* | ✓ |
@@ -243,6 +243,8 @@ await tpm.readPublic('0x81000001');   // → { publicKeyDer, name }
 
 ```javascript
 await tpm.pcr.read([0, 1, 7], 'sha256');   // → { 0: 'hex…', 1: 'hex…', … }
+await tpm.pcr.extend(7, digest);           // digest: 32-byte Buffer (SHA-256 bank)
+await Tpm.pcrExtend(7, digest);            // flat
 ```
 
 ### Random

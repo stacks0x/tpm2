@@ -173,7 +173,7 @@ try {
 }
 ```
 
-More detail: [getting-started.md](./docs/getting-started.md) · [windows-pcp.md](./docs/windows-pcp.md)
+More detail: [getting-started.md](./docs/getting-started.md) · [windows-pcp.md](./docs/windows-pcp.md) · [Error reference](#error-reference)
 
 ---
 
@@ -290,18 +290,82 @@ type QuoteOptions = {
 };
 ```
 
-### Errors
+---
+
+## Error reference
+
+Failures throw `TpmError` (subclass of `Error`). Inspect **`code`** for programmatic handling; use **`message`** for logs; **`tpmRc`** / **`hresult`** carry raw platform codes when present.
 
 ```javascript
-catch (err) {
+import { Tpm, TpmError } from 'node-tpm2';
+
+try {
+  await Tpm.provisionAk({ scope: 'machine', keyName: 'fleet-ak' });
+} catch (err) {
   if (err instanceof TpmError) {
-    err.code;        // REQUIRES_ELEVATION | TPM_RC | ACCESS_DENIED | …
-    err.tpmRc;       // TPM return code
-    err.hresult;     // Windows NCrypt
-    err.suggestion;
+    err.code;        // stable string — branch on this
+    err.message;     // human detail (includes context + hex codes)
+    err.suggestion;  // optional remediation
+    err.tpmRc;       // TPM 2.0 response code (number), when applicable
+    err.hresult;     // Windows NCrypt / Win32 HRESULT (number), when applicable
   }
 }
 ```
+
+**Wire format** (native → JS): `__tpm2__code|message|suggestion|tpmRc|hresult` — empty trailing fields mean undefined.
+
+**Stability:** error **codes** are semver-stable after `latest`. New codes may be added in minors; renames require a major.
+
+### Stable error codes
+
+| Code | When | `tpmRc` | `hresult` | Typical `suggestion` |
+|------|------|:-------:|:---------:|----------------------|
+| `TPM_UNAVAILABLE` | No TPM, no native binary, macOS, or backend not built | — | — | Install platform package / check TPM |
+| `ACCESS_DENIED` | OS denied device or key access | — | sometimes | Linux: `tss` group; container: pass device |
+| `REQUIRES_ELEVATION` | Windows operation needs Admin/SYSTEM | — | ✓ | Re-run enrollment elevated or as SYSTEM |
+| `COMMAND_BLOCKED` | Windows TBS driver blocked the command ordinal | ✓ | — | Use NCrypt PCP path (e.g. activation) |
+| `NOT_SUPPORTED` | Feature or PCP capability missing on this platform | — | sometimes | — |
+| `INVALID_ARGUMENT` | Bad JS/Rust option (e.g. empty machine `keyName`) | — | sometimes | Fix caller input |
+| `KEY_NOT_FOUND` | NCrypt key / blob locator not found | — | ✓ | Check persisted blob / key name |
+| `ALREADY_EXISTS` | NCrypt key name already exists | — | ✓ | Use `overwrite: true` |
+| `MARSHALLING_ERROR` | Codec bug, malformed TPM command, or unclassified NCrypt failure | sometimes | sometimes | Report bug or check firmware |
+| `TRANSPORT_ERROR` | TBS / `/dev/tpmrm0` I/O failure | — | — | Retry; check driver / device node |
+| `AUTH_FAILED` | TPM auth-class response (policy / password / hierarchy) | ✓ | — | Check object auth or policy |
+| `TPM_RC` | Other TPM non-success response | ✓ | — | See `tpmRc` nibble / TPM spec |
+
+### TPM response code → `TpmError.code`
+
+When the TPM returns a non-zero response code, the library classifies it:
+
+| TPM RC class | Condition | Maps to | Example `tpmRc` |
+|--------------|-----------|---------|-----------------|
+| Success | `rc === 0` | (no error) | `0` |
+| Auth | `(rc & 0x0300) === 0x0300` | `AUTH_FAILED` | `0x38E` (`TPM_RC_AUTH_FAIL`) |
+| Format | `(rc & 0xFF00) === 0x0100` or FMT1 bit set | `MARSHALLING_ERROR` | `0x125` (`TPM_RC_ASYMMETRIC`) |
+| Windows TBS blocked | `rc === 0x80280400` | `COMMAND_BLOCKED` | `0x80280400` |
+| Other | everything else | `TPM_RC` | vendor-specific |
+
+Auth-class and format-class detection follows TPM 2.0 response-code layout (see `src/tbs/rc.rs`). **`tpmRc` on the error is the full 32-bit value** from the TPM response header — use it for logs and TPM spec lookup.
+
+### Windows NCrypt HRESULT → `TpmError.code`
+
+PCP / NCrypt failures on Windows map through `classify_ncrypt` (`src/tbs/ncrypt.rs`):
+
+| HRESULT | Name | Typical code | Notes |
+|---------|------|--------------|-------|
+| `0x80090011` | `NTE_NOT_FOUND` | `KEY_NOT_FOUND` | Missing persisted key |
+| `0x80090016` | `NTE_BAD_KEYSET` | `KEY_NOT_FOUND` | Key set not found |
+| `0x8009000B` | `NTE_EXISTS` | `ALREADY_EXISTS` | Key name collision |
+| `0x80090027` | `NTE_INVALID_PARAMETER` | `INVALID_ARGUMENT` | Bad NCrypt parameter |
+| `0x80090030` | `NTE_DEVICE_NOT_READY` | `REQUIRES_ELEVATION` | Often privilege / readiness |
+| `0x80090010` | `NTE_PERM` | `REQUIRES_ELEVATION` | Permission |
+| `0x80090029` | `NTE_BAD_FLAGS` | `REQUIRES_ELEVATION` | Bad flags |
+| `0x8009000F` | `NTE_INTERNAL_ERROR` | `REQUIRES_ELEVATION` | Machine provision from standard user (observed) |
+| `0x80280084` | PCP activation / `TPM_RC_VALUE` | `REQUIRES_ELEVATION` | Standard user activation; elevated → `MARSHALLING_ERROR` |
+| `0x5` / `0x80070005` | Access denied | `REQUIRES_ELEVATION` or `ACCESS_DENIED` | Machine provision → elevation |
+| (other) | — | `MARSHALLING_ERROR` | Unmapped NCrypt failure |
+
+**Transport** errors from `/dev/tpmrm0` or TBS that mention permission denied are promoted to `ACCESS_DENIED`; other I/O errors stay `TRANSPORT_ERROR`.
 
 ---
 

@@ -1,6 +1,6 @@
 {
   "name": "node-tpm2-linux-arm64-musl",
-  "version": "0.0.4-beta.3",
+  "version": "0.0.4-beta.4",
   "cpu": [
     "arm64"
   ],

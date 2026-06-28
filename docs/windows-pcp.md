@@ -7,12 +7,15 @@ On Windows, node-tpm2 uses the **Microsoft Platform Crypto Provider** for attest
 | Operation | Standard user | Elevated admin | SYSTEM |
 |-----------|---------------|----------------|--------|
 | `Tpm.isAvailable()`, PCR read, `readPublic` | Yes | Yes | Yes |
+| `tpm.pcr.extend` | Yes † | No (`REQUIRES_ELEVATION`) | Yes † |
 | `provisionAk()` user scope (`PCP1`) | Yes | Yes | Yes |
 | `quote()` | Yes | Yes | Yes |
 | `provisionAk({ scope: 'machine' })` (`PCP2`) | No | Yes | Yes (production enroll) |
 | `activateCredential()` (PCP) | No | Yes | Yes |
 
 **Runtime apps** typically only need `quote()` with a blob/locator from enrollment. Activation is an enrollment-time proof-of-possession step.
+
+**† `pcr.extend`:** Prefer PCR indices **16–23** (not **0–7**, which are boot/Secure Boot measurements). Standard users receive **`REQUIRES_ELEVATION`** (`hresult` `0x80280400`); **Administrator** can extend (validated on real Intel laptop). Linux standard user can extend unless firmware locks the index.
 
 ## AK blob formats
 

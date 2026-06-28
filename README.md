@@ -194,7 +194,7 @@ More detail: [getting-started.md](./docs/getting-started.md) · [api-reference.m
 | `tpm.random.bytes(n)` | ✓ | ✓ | ✓ |
 | **pcr** | | | |
 | `tpm.pcr.read(...)` | ✓ | ✓ | ✓ |
-| `tpm.pcr.extend(i, digest)` | ✓ * | ✓ * | ✓ |
+| `tpm.pcr.extend(i, digest)` | ✓ † | ✗ | ✓ † |
 | **nv** | | | |
 | `tpm.nv.read(...)` | ✓ *planned* | ✓ *planned* | ✓ |
 | `tpm.nv.write(...)` | ✓ *planned* | ✓ *planned* | ✓ |
@@ -217,7 +217,9 @@ More detail: [getting-started.md](./docs/getting-started.md) · [api-reference.m
 
 **Windows fleet pattern:** provision machine AK elevated or as SYSTEM once → persist `akBlob` → standard users quote forever after. See [docs/windows-pcp.md](./docs/windows-pcp.md).
 
-**Planned rows** are design targets from the [roadmap](./docs/roadmap.md); unprivileged use matches the Phase 0 spike (`GetRandom`, `CreatePrimary` succeeded on Windows 11 without admin). Firmware or group policy can still deny specific PCR/NV operations — those surface as `TPM_RC` or `COMMAND_BLOCKED`, not silent failure.
+**Planned rows** are design targets from the [roadmap](./docs/roadmap.md); unprivileged use matches the Phase 0 spike (`GetRandom`, `CreatePrimary` succeeded on Windows 11 without admin). Firmware or group policy can still deny specific PCR/NV operations on Linux — those surface as `TPM_RC`, not silent failure.
+
+**† `pcr.extend`:** Linux standard user (prefer indices **16–23** for experiments; avoid **0–7** boot/Secure Boot PCRs). **Windows standard user → `REQUIRES_ELEVATION`** (`TPM_E_COMMAND_BLOCKED` from TBS). Windows Administrator can extend on real hardware (validated). Standard-user failure is not `COMMAND_BLOCKED` — re-run elevated.
 
 ---
 
@@ -347,8 +349,8 @@ try {
 |------|------|:-------:|:---------:|----------------------|
 | `TPM_UNAVAILABLE` | No TPM, no native binary, macOS, or backend not built | — | — | Install platform package / check TPM |
 | `ACCESS_DENIED` | OS denied device or key access | — | sometimes | Linux: `tss` group; container: pass device |
-| `REQUIRES_ELEVATION` | Windows operation needs Admin/SYSTEM | — | ✓ | Re-run enrollment elevated or as SYSTEM |
-| `COMMAND_BLOCKED` | Windows TBS driver blocked the command ordinal | ✓ | — | Use NCrypt PCP path (e.g. activation) |
+| `REQUIRES_ELEVATION` | Windows operation needs Admin/SYSTEM | — | ✓ | Re-run enrollment elevated or as SYSTEM; **`pcr.extend` from standard user** |
+| `COMMAND_BLOCKED` | Windows TBS blocked raw ordinal (e.g. ActivateCredential) | ✓ | — | Use NCrypt PCP — elevation does not help |
 | `NOT_SUPPORTED` | Feature or PCP capability missing on this platform | — | sometimes | — |
 | `INVALID_ARGUMENT` | Bad JS/Rust option (e.g. empty machine `keyName`) | — | sometimes | Fix caller input |
 | `KEY_NOT_FOUND` | NCrypt key / blob locator not found | — | ✓ | Check persisted blob / key name |
@@ -367,7 +369,9 @@ When the TPM returns a non-zero response code, the library classifies it:
 | Success | `rc === 0` | (no error) | `0` |
 | Auth | `(rc & 0x0300) === 0x0300` | `AUTH_FAILED` | `0x38E` (`TPM_RC_AUTH_FAIL`) |
 | Format | `(rc & 0xFF00) === 0x0100` or FMT1 bit set | `MARSHALLING_ERROR` | `0x125` (`TPM_RC_ASYMMETRIC`) |
-| Windows TBS blocked | `rc === 0x80280400` | `COMMAND_BLOCKED` | `0x80280400` |
+| Windows TBS blocked | `rc === 0x80280400` | `COMMAND_BLOCKED` * | `0x80280400` |
+
+\* **`PCR_Extend`:** mapped to **`REQUIRES_ELEVATION`** (same `hresult` `0x80280400`) — Administrator can extend on Windows client; standard user should re-run elevated.
 | Other | everything else | `TPM_RC` | vendor-specific |
 
 Auth-class and format-class detection follows TPM 2.0 response-code layout (see `src/tbs/rc.rs`). **`tpmRc` on the error is the full 32-bit value** from the TPM response header — use it for logs and TPM spec lookup.

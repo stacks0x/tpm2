@@ -378,7 +378,11 @@ Returned by `Tpm.open()`. All sub-namespaces are plain objects with async method
 
 **Under the hood:** Sends `TPM2_PCR_Extend` with `authHandle = TPM_RH_NULL`, one SHA-256 digest in `TPML_DIGEST_VALUES`. The TPM updates the bank as `SHA256(old_pcr || digest)`.
 
-**Caveats:** Firmware or platform policy may lock specific PCRs; failures surface as `TPM_RC` or `COMMAND_BLOCKED`.
+**Caveats:**
+
+- **Linux:** Firmware may lock specific indices (often **0–7**). Prefer **16–23** for application measurements.
+- **Windows standard user:** TBS returns `TPM_E_COMMAND_BLOCKED` → library maps to **`REQUIRES_ELEVATION`** (re-run Admin PowerShell). Not `COMMAND_BLOCKED`.
+- **Windows Administrator:** Can extend on real client hardware (validated). Does not affect quotes that only select other PCRs (e.g. `[0,1,7]`).
 
 **Flat equivalent:** [`Tpm.pcrExtend(index, digest)`](#tpm-pcrextendindex-digest-promisevoid).
 
@@ -762,14 +766,16 @@ TPM response codes map by class: auth → `AUTH_FAILED`, format → `MARSHALLING
 | API | Linux user | Windows user | Windows Admin/SYSTEM |
 |-----|:----------:|:------------:|:--------------------:|
 | `Tpm.isAvailable()`, `open()`, `info()` | ✓ | ✓ | ✓ |
-| `tpm.random.bytes`, `tpm.pcr.read`, `tpm.pcr.extend` | ✓ | ✓ | ✓ |
+| `tpm.random.bytes`, `tpm.pcr.read` | ✓ | ✓ | ✓ |
+| `tpm.pcr.extend` | ✓ † | ✗ → `REQUIRES_ELEVATION` | ✓ † |
 | `tpm.keys.create/load`, `key.sign` | ✓ | ✓ | ✓ |
 | `tpm.attest.provisionAk()` user scope | ✓ | ✓ | ✓ |
 | `tpm.attest.provisionAk({ scope: 'machine' })` | — | ✗ | ✓ |
 | `ak.quote` / `Tpm.quote` | ✓ | ✓ | ✓ |
 | `ak.activateCredential` | ✓ | ✗ | ✓ |
-| `tpm.pcr.extend` | ✓* | ✓* | ✓ |
 | `tpm.nv.*` (planned) | ✓* | ✓* | ✓ |
+
+† **`pcr.extend`:** Linux user OK (avoid boot PCRs 0–7). Windows user blocked → **`REQUIRES_ELEVATION`**; Admin/SYSTEM OK. See [windows-pcp.md](./windows-pcp.md).
 
 \* Planned; firmware/policy may still deny.
 

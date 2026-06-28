@@ -88,7 +88,7 @@ impl TpmOpError {
             }
             Self::CommandBlocked { context, tpm_rc } => format!(
                 "{context}: Windows TBS blocked TPM2 command 0x{tpm_rc:08X} (TPM_E_COMMAND_BLOCKED); \
-                 the Windows TPM driver allow-list does not permit this ordinal via raw TBS (elevation does not help)"
+                 the Windows TPM driver allow-list does not permit this ordinal via raw TBS for the current process"
             ),
             Self::MarshallingError {
                 context,
@@ -123,7 +123,7 @@ impl TpmOpError {
                 "Re-run as Administrator or SYSTEM (production enrollment uses SYSTEM).",
             ),
             Self::CommandBlocked { .. } => Some(
-                "Windows credential activation uses NCrypt PCP (PCP_TPM12_IDACTIVATION).",
+                "On Windows, ActivateCredential must use NCrypt PCP — raw TBS cannot reach this ordinal (elevation does not help).",
             ),
             Self::InvalidArgument { .. } => None,
             Self::KeyNotFound { .. } => None,
@@ -287,6 +287,25 @@ pub fn check_tpm_rc(resp: &[u8], context: &str) -> TpmResult<()> {
     Ok(())
 }
 
+/// `TPM2_PCR_Extend` on Windows: standard users get `TPM_E_COMMAND_BLOCKED` from TBS;
+/// Administrator can extend (validated on real hardware). Map that block to elevation.
+pub fn check_pcr_extend_rc(resp: &[u8]) -> TpmResult<()> {
+    let rc = crate::tbs::commands::tpm_rc_from_response(resp).ok_or_else(|| {
+        TpmOpError::marshalling("PCR_Extend", "TPM response too short")
+    })?;
+    if rc == 0 {
+        return Ok(());
+    }
+    #[cfg(windows)]
+    if rc == WINDOWS_TPM_E_COMMAND_BLOCKED {
+        return Err(TpmOpError::RequiresElevation {
+            context: "PCR_Extend".to_string(),
+            hresult: rc,
+        });
+    }
+    check_tpm_rc(resp, "PCR_Extend")
+}
+
 #[cfg(feature = "napi")]
 impl From<TpmOpError> for napi::Error {
     fn from(e: TpmOpError) -> Self {
@@ -324,5 +343,22 @@ mod tests {
     fn format_class_maps_to_marshalling_error() {
         let err = TpmOpError::from_tpm_rc(0x0000_0125, "Quote");
         assert_eq!(err.code(), codes::MARSHALLING_ERROR);
+    }
+
+    #[test]
+    fn pcr_extend_command_blocked_maps_to_elevation_on_windows() {
+        let mut resp = vec![0u8; 10];
+        resp[6..10].copy_from_slice(&WINDOWS_TPM_E_COMMAND_BLOCKED.to_be_bytes());
+        let err = super::check_pcr_extend_rc(&resp).unwrap_err();
+        #[cfg(windows)]
+        {
+            assert_eq!(err.code(), codes::REQUIRES_ELEVATION);
+            assert_eq!(err.hresult(), Some(WINDOWS_TPM_E_COMMAND_BLOCKED));
+            assert_eq!(err.tpm_rc(), None);
+        }
+        #[cfg(not(windows))]
+        {
+            assert_eq!(err.code(), codes::COMMAND_BLOCKED);
+        }
     }
 }

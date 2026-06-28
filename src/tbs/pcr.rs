@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use crate::tbs::error::{check_tpm_rc, TpmOpError, TpmResult};
+use crate::tbs::error::{check_pcr_extend_rc, check_tpm_rc, TpmOpError, TpmResult};
 use crate::tbs::parse::{hex_encode, read_pml_digest, read_pml_pcr_selection, ResponseParser};
 use crate::tbs::wire::{command, command_with_password_session, u16, u32};
 use crate::tbs::submit_tpm_command;
@@ -109,7 +109,7 @@ pub fn pcr_extend(index: u32, digest: &[u8]) -> TpmResult<()> {
     let params = digest_values_sha256(digest);
     let cmd = command_with_password_session(index, TPM_CC_PCR_EXTEND, &params);
     let resp = submit_tpm_command(&cmd).map_err(TpmOpError::transport)?;
-    check_tpm_rc(&resp, "PCR_Extend")?;
+    check_pcr_extend_rc(&resp)?;
     Ok(())
 }
 

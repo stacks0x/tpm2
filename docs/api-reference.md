@@ -613,6 +613,16 @@ type ActivateCredentialOptions = {
 
 ## Attestation flows
 
+### Threat model (read this for fleet keys)
+
+Attestation keys prove **device identity**, not **application identity**.
+
+- **Windows machine scope (`PCP2`):** The AK blob is a locator (`keyName` + scope), not a shared secret. Standard users with the fleet `keyName` can quote — by design, so runtime apps need no admin. A quote answers: “this enrolled TPM, these PCRs, this challenge.” It does not answer: “only my.exe ran.”
+- **Linux:** Wrapped AK blobs are sensitive on shared hosts: any principal with `/dev/tpmrm0` access can load the blob and quote on that TPM.
+- **Enrollment vs runtime:** Bind the device at enroll time (verify `akPublicDer`, register with your service). Use `qualifyingData` on each quote for replay resistance. User/app binding is your session layer, not the TPM quote alone.
+
+See [windows-pcp.md](./windows-pcp.md#threat-model-device-vs-application) for the full Windows PCP framing.
+
 ### Dev / same-user (Linux and Windows)
 
 ```javascript

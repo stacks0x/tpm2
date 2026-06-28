@@ -94,6 +94,8 @@ const saved = ak.export();   // persist { public, private } for next session
 
 ### Windows fleet enrollment
 
+**Threat model:** A machine AK proves **this enrolled device**, not which app or user quoted. The blob is a locator (`keyName`), not a secret — see [Threat model in windows-pcp.md](./docs/windows-pcp.md#threat-model-device-vs-application).
+
 **Once** at install time (Admin or SYSTEM): create a machine-scoped key with a stable name and persist the blob.
 
 ```javascript

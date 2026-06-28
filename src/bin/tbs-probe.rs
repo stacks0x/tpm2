@@ -1,6 +1,6 @@
 //! Direct-TBS validation probes (Option B). Linux and Windows, non-elevated by default.
 //!
-//! Windows PCP activation requires elevation; `all` skips activate when unprivileged.
+//! Windows PCP activation requires elevation; `all` skips activate and policy-secret when unprivileged.
 //! Fleet cross-user spike: elevated `machine-provision`, then standard `quote-blob`.
 //! Run `tbs-probe help` on Windows for step-by-step instructions.
 
@@ -83,7 +83,7 @@ BUILD (once, any shell):
 ────────────────────────────────────────────────────────────────────
   {exe} all
 
-Proves quote/provision work unprivileged. Activate is SKIPped (enrollment-only).
+Proves quote/provision work unprivileged. Activate and policy-secret are SKIPped (enrollment / elevated diagnostics).
 
 ────────────────────────────────────────────────────────────────────
 2. CROSS-USER QUOTE (standard user quotes machine AK)  [required]
@@ -453,6 +453,16 @@ fn read_ak_blob_file(path: &str) -> Result<AkBlob, String> {
 }
 
 fn run_policy_secret() -> Result<(), String> {
+    #[cfg(windows)]
+    if !node_tpm2::tbs::pcp::is_process_elevated() {
+        println!("== policy-secret (StartAuthSession + PolicySecret endorsement) ==");
+        println!(
+            "  SKIP  raw-TBS PolicySecret requires elevation on Windows; \
+             run `tbs-probe policy-secret` elevated or use Linux for credential policy tests"
+        );
+        return Ok(());
+    }
+
     use node_tpm2::tbs::session_hmac::random_nonce_32;
 
     const TPM_CC_POLICY_SECRET: u32 = 0x0000_0151;

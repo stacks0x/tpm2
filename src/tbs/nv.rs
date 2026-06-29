@@ -284,9 +284,12 @@ fn nv_session_auth(
     }
 }
 
-/// Handles + parameters for NV_Read / NV_Write (SAPI layout: nvIndex is handle 2 when
-/// authHandle is a hierarchy). Write params: data, offset (TSS wire order). Read params:
-/// offset, size (Part 3 order).
+/// Handles + parameters for NV_Read / NV_Write.
+///
+/// Wire layout matches tpm2-tss Sys Prepare + CommonPrepareEpilogue:
+/// - Two handles when authHandle != nvIndex: `[authHandle, nvIndex]`, then auth area, then params.
+/// - NV_Read params: `size` (u16), `offset` (u16).
+/// - NV_Write params: `data` (TPM2B), `offset` (u16).
 fn nv_access_handles_and_params(
     auth_handle: u32,
     index: u32,
@@ -314,10 +317,10 @@ pub fn nv_read(
     validate_nv_bounds(&info, offset, size as u32, "read")?;
 
     let auth_handle = nv_auth_handle(index, info.attributes, false);
-    // Part 3 parameter order (after nvIndex handle): offset, size.
+    // tpm2-tss NV_Read Prepare: size then offset (after authHandle + nvIndex handles).
     let mut params = Vec::new();
-    params.extend_from_slice(&offset.to_be_bytes());
     params.extend_from_slice(&size.to_be_bytes());
+    params.extend_from_slice(&offset.to_be_bytes());
     let (handles, params) = nv_access_handles_and_params(auth_handle, index, params);
     let session = nv_session_auth(auth_handle, index_auth, owner_auth);
     let cmd = command_with_handles_and_session(&handles, &session, TPM_CC_NV_READ, &params);
@@ -386,10 +389,36 @@ mod tests {
     }
 
     #[test]
+    fn nv_read_command_golden_full_owner_index() {
+        let mut params = Vec::new();
+        params.extend_from_slice(&32u16.to_be_bytes());
+        params.extend_from_slice(&0u16.to_be_bytes());
+        let cmd = command_with_handles_and_session(
+            &[TPM_RH_OWNER, 0x0180_0042],
+            &password_session_null_auth(),
+            TPM_CC_NV_READ,
+            &params,
+        );
+        // Header
+        assert_eq!(&cmd[0..2], &[0x80, 0x02]);
+        assert_eq!(u32::from_be_bytes([cmd[2], cmd[3], cmd[4], cmd[5]]), cmd.len() as u32);
+        assert_eq!(&cmd[6..10], &TPM_CC_NV_READ.to_be_bytes());
+        // Handles
+        assert_eq!(&cmd[10..14], &TPM_RH_OWNER.to_be_bytes());
+        assert_eq!(&cmd[14..18], &0x0180_0042u32.to_be_bytes());
+        // Auth area: count=1, password session (9 bytes)
+        assert_eq!(&cmd[18..22], &[0, 0, 0, 9]);
+        assert_eq!(&cmd[22..31], password_session_null_auth().as_slice());
+        // Params: size=32, offset=0
+        assert_eq!(&cmd[31..35], &[0x00, 0x20, 0x00, 0x00]);
+        assert_eq!(cmd.len(), 35);
+    }
+
+    #[test]
     fn nv_read_command_golden_prefix() {
         let mut params = Vec::new();
-        params.extend_from_slice(&0u16.to_be_bytes());
         params.extend_from_slice(&64u16.to_be_bytes());
+        params.extend_from_slice(&0u16.to_be_bytes());
         let cmd = command_with_handles_and_session(
             &[TPM_RH_OWNER, 0x01c0_0002],
             &password_session_null_auth(),

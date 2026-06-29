@@ -362,7 +362,7 @@ mod tests {
 
         use crate::tbs::submit_tpm_command;
 
-        if !crate::tbs::hw_test::enabled() {
+        if !crate::tbs::hw_test::mutating_enabled() {
             return;
         }
 

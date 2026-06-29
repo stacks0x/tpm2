@@ -404,7 +404,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn linux_credential_roundtrip() {
-        if !crate::tbs::hw_test::enabled() {
+        if !crate::tbs::hw_test::mutating_enabled() {
             return;
         }
         let blob = provision_ak_blob().expect("provision");

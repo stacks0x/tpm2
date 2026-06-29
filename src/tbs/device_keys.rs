@@ -355,7 +355,7 @@ mod tests {
     #[cfg(any(windows, target_os = "linux"))]
     #[test]
     fn create_and_sign_ecc_roundtrip() {
-        if !crate::tbs::hw_test::enabled() {
+        if !crate::tbs::hw_test::mutating_enabled() {
             return;
         }
         let opts = KeyCreateOptions::default();

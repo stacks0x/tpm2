@@ -173,7 +173,7 @@ mod tests {
     fn linux_pcr_extend_roundtrip() {
         use sha2::{Digest, Sha256};
 
-        if !crate::tbs::hw_test::enabled() {
+        if !crate::tbs::hw_test::mutating_enabled() {
             return;
         }
 

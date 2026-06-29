@@ -150,3 +150,8 @@ vite.config.ts.timestamp-*
 
 # Maintainer planning docs (local only — not in git, not on npm)
 /docs/dev/
+
+# Local Cursor agent constraints — this dev machine (NEVER commit)
+.cursor/rules/tpm-dev-machine-no-mutate.mdc
+.cursor/skills/tpm-dev-machine-no-mutate/
+.local/

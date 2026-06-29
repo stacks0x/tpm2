@@ -409,7 +409,7 @@ mod tests {
     #[cfg(any(windows, target_os = "linux"))]
     #[test]
     fn hw_seal_roundtrip_without_pcr() {
-        if !crate::tbs::hw_test::enabled() {
+        if !crate::tbs::hw_test::mutating_enabled() {
             return;
         }
         let secret = b"node-tpm2-seal-test-secret";

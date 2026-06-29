@@ -206,7 +206,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn linux_ak_blob_roundtrip() {
-        if !crate::tbs::hw_test::enabled() {
+        if !crate::tbs::hw_test::mutating_enabled() {
             return;
         }
         let primary = create_storage_primary().expect("CreatePrimary");

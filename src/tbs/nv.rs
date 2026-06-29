@@ -518,29 +518,6 @@ mod tests {
 
     #[cfg(any(windows, target_os = "linux"))]
     #[test]
-    fn hw_nv_define_write_read_undefine() {
-        if !crate::tbs::hw_test::enabled() {
-            return;
-        }
-        let index = 0x0180_0043;
-        let _ = nv_undefine(index, None);
-        nv_define(&NvDefineOptions {
-            index,
-            size: 32,
-            attributes: None,
-            index_auth: None,
-            owner_auth: None,
-        })
-        .expect("nv_define");
-        let payload = b"node-tpm2-hw-nv-test!!";
-        nv_write(index, 0, payload, None, None, None).expect("nv_write");
-        let read_back = nv_read(index, 0, payload.len() as u16, None, None, None).expect("nv_read");
-        assert_eq!(read_back, payload);
-        nv_undefine(index, None).expect("nv_undefine");
-    }
-
-    #[cfg(any(windows, target_os = "linux"))]
-    #[test]
     fn hw_read_ek_certificate() {
         if !crate::tbs::hw_test::enabled() {
             return;

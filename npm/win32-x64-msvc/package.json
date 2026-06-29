@@ -1,6 +1,6 @@
 {
   "name": "node-tpm2-windows-x64-msvc",
-  "version": "0.0.5-beta.0",
+  "version": "0.0.5-beta.1",
   "cpu": [
     "x64"
   ],

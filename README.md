@@ -223,7 +223,9 @@ More detail: [getting-started.md](./docs/getting-started.md) · [api-reference.m
 
 **‡ `nv.read/write`:** Success depends on index attributes and auth. EK cert indices (`0x01c00002`, `0x01c0000A`) are read-only.
 
-**§ `nv.define/undefine`:** Owner NV range only (`0x01800000`–`0x01BFFFFF`). Requires owner authorization (often empty password). **Consumes NV space** until undefined — use only on test machines or with a chosen index.
+**§ `nv.define/undefine`:** Owner NV range only (`0x01800000`–`0x01BFFFFF`). Requires owner authorization (often empty password). **Consumes NV space** until undefined — use only on test machines or with a chosen index. Windows standard user → **`REQUIRES_ELEVATION`** (same TBS block as `pcr.extend`); run Admin PowerShell.
+
+**Note:** On Windows, raw TBS may reject `nv.readPublic` for owner-range indices (`TPM_RC` ~`0xA6`) even when define/read/write succeed. Factory indices (`0x01c00002` EK cert) work. After `nv.define`, use the known size for read/write; `examples/nv-smoke.mjs` handles this.
 
 **† `pcr.extend`:** Linux standard user (prefer indices **16–23** for experiments; avoid **0–7** boot/Secure Boot PCRs). **Windows standard user → `REQUIRES_ELEVATION`** (`TPM_E_COMMAND_BLOCKED` from TBS). Windows Administrator can extend on real hardware (validated). Standard-user failure is not `COMMAND_BLOCKED` — re-run elevated.
 
@@ -379,7 +381,7 @@ try {
 |------|------|:-------:|:---------:|----------------------|
 | `TPM_UNAVAILABLE` | No TPM, no native binary, macOS, or backend not built | — | — | Install platform package / check TPM |
 | `ACCESS_DENIED` | OS denied device or key access | — | sometimes | Linux: `tss` group; container: pass device |
-| `REQUIRES_ELEVATION` | Windows operation needs Admin/SYSTEM | — | ✓ | Re-run enrollment elevated or as SYSTEM; **`pcr.extend` from standard user** |
+| `REQUIRES_ELEVATION` | Windows operation needs Admin/SYSTEM | — | ✓ | Re-run elevated; **`pcr.extend`** and **`nv.define`/`nv.undefine`** from standard user |
 | `COMMAND_BLOCKED` | Windows TBS blocked raw ordinal (e.g. ActivateCredential) | ✓ | — | Use NCrypt PCP — elevation does not help |
 | `NOT_SUPPORTED` | Feature or PCP capability missing on this platform | — | sometimes | — |
 | `INVALID_ARGUMENT` | Bad JS/Rust option (e.g. empty machine `keyName`) | — | sometimes | Fix caller input |

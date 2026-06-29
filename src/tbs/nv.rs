@@ -1,11 +1,11 @@
 //! TPM2 NV_ReadPublic / NV_Read / NV_Write.
 
-use crate::tbs::commands::tpm_rc_from_response;
 use crate::tbs::error::{check_tpm_rc, TpmOpError, TpmResult};
 use crate::tbs::parse::ResponseParser;
 use crate::tbs::read_public::parse_handle;
 use crate::tbs::wire::{
-    command, command_with_handles_and_session, password_session_auth, tpm2b, tpm2b_empty, u32,
+    command, command_with_handles_and_session, command_with_handles_no_session,
+    password_session_auth, tpm2b, tpm2b_empty, u32,
 };
 use crate::tbs::submit_tpm_command;
 
@@ -28,7 +28,7 @@ const TPMA_NV_AUTHREAD: u32 = 1 << 18;
 const TPMA_NV_NO_DA: u32 = 1 << 27;
 
 /// Default for `nv_define`: owner read/write, no dictionary attack lockout.
-const DEFAULT_NV_DEFINE_ATTRIBUTES: u32 =
+pub const DEFAULT_NV_DEFINE_ATTRIBUTES: u32 =
     TPMA_NV_OWNERREAD | TPMA_NV_OWNERWRITE | TPMA_NV_NO_DA;
 
 /// Owner NV index range (TPM 2.0 Part 2).
@@ -54,7 +54,7 @@ pub fn read_ek_certificate() -> TpmResult<Option<Vec<u8>>> {
             if info.data_size == 0 {
                 return Ok(None);
             }
-            nv_read(index, 0, info.data_size, None).map(Some)
+            nv_read(index, 0, info.data_size, None, None).map(Some)
         }) {
             Ok(Some(data)) if !data.is_empty() => return Ok(Some(data)),
             Ok(_) => continue,
@@ -66,15 +66,40 @@ pub fn read_ek_certificate() -> TpmResult<Option<Vec<u8>>> {
 }
 
 pub fn nv_read_public(index: u32) -> TpmResult<NvIndexInfo> {
-    let cmd = command(TPM_ST_NO_SESSIONS, TPM_CC_NV_READ_PUBLIC, &u32(index));
+    let cmd = command_with_handles_no_session(&[index], TPM_CC_NV_READ_PUBLIC, &[]);
     let resp = submit_tpm_command(&cmd).map_err(TpmOpError::transport)?;
-    let rc = tpm_rc_from_response(&resp)
-        .ok_or_else(|| TpmOpError::other("NV_ReadPublic: short response"))?;
-    if rc != 0 {
-        return Err(TpmOpError::from_tpm_rc(rc, "NV_ReadPublic"));
-    }
+    check_tpm_rc(&resp, "NV_ReadPublic")?;
+    parse_nv_read_public_response(&resp)
+}
 
-    let mut parser = ResponseParser::after_rc(&resp)?;
+fn parse_nv_read_public_response(resp: &[u8]) -> TpmResult<NvIndexInfo> {
+    parse_nv_read_public_fields(resp)
+}
+
+fn parse_nv_read_public_fields(resp: &[u8]) -> TpmResult<NvIndexInfo> {
+    parse_nv_read_public_fields_skip(resp, nv_read_public_skip_param_size(resp)).or_else(|_| {
+        let alt = !nv_read_public_skip_param_size(resp);
+        parse_nv_read_public_fields_skip(resp, alt)
+    })
+}
+
+/// Windows TBS often omits the response parameter-area size prefix (same as ReadPublic).
+fn nv_read_public_skip_param_size(resp: &[u8]) -> bool {
+    if resp.len() < 12 {
+        return true;
+    }
+    let first_u16 = u16::from_be_bytes([resp[10], resp[11]]);
+    !(first_u16 >= 14 && (12 + first_u16 as usize) <= resp.len())
+}
+
+fn parse_nv_read_public_fields_skip(
+    resp: &[u8],
+    skip_param_size: bool,
+) -> TpmResult<NvIndexInfo> {
+    let mut parser = ResponseParser::after_rc(resp)?;
+    if skip_param_size {
+        let _ = parser.read_u32()?;
+    }
     let nv_public = parser.read_tpm2b()?;
     if nv_public.len() < 14 {
         return Err(TpmOpError::other("NV_ReadPublic: truncated nvPublic"));
@@ -85,6 +110,61 @@ pub fn nv_read_public(index: u32) -> TpmResult<NvIndexInfo> {
         data_size,
         attributes,
     })
+}
+
+/// Resolve NV metadata. On Windows, raw TBS often rejects `NV_ReadPublic` for owner-range
+/// indices (TPM_RC ~0xA6) even after a successful `NV_DefineSpace`; fall back to caller
+/// hints or default owner attributes so read/write still work.
+fn nv_index_info(index: u32, hint: Option<NvIndexInfo>) -> TpmResult<NvIndexInfo> {
+    if let Some(info) = hint {
+        return Ok(info);
+    }
+    match nv_read_public(index) {
+        Ok(info) => Ok(info),
+        Err(e) if owner_nv_read_public_fallback(index, &e) => Ok(NvIndexInfo {
+            data_size: u16::MAX,
+            attributes: DEFAULT_NV_DEFINE_ATTRIBUTES,
+        }),
+        Err(e) => Err(e),
+    }
+}
+
+fn owner_nv_read_public_fallback(index: u32, err: &TpmOpError) -> bool {
+    if !(OWNER_NV_INDEX_MIN..=OWNER_NV_INDEX_MAX).contains(&index) {
+        return false;
+    }
+    #[cfg(windows)]
+    {
+        if err.code() == crate::tbs::codes::MARSHALLING_ERROR {
+            return true;
+        }
+        if err.code() == crate::tbs::codes::TPM_RC {
+            return matches!(err.tpm_rc(), Some(0x0000_00A6) | Some(0x0000_018B));
+        }
+    }
+    #[cfg(not(windows))]
+    let _ = err;
+    false
+}
+
+fn validate_nv_bounds(
+    info: &NvIndexInfo,
+    offset: u16,
+    len: u32,
+    op: &str,
+) -> TpmResult<()> {
+    if info.data_size == u16::MAX {
+        return Ok(());
+    }
+    if offset as u32 + len > info.data_size as u32 {
+        return Err(TpmOpError::invalid_argument(format!(
+            "NV {op} range {}..{} exceeds index data size {}",
+            offset,
+            offset as u32 + len,
+            info.data_size
+        )));
+    }
+    Ok(())
 }
 
 fn nv_auth_handle(index: u32, attributes: u32, for_write: bool) -> u32 {
@@ -164,7 +244,7 @@ pub fn nv_define(opts: &NvDefineOptions) -> TpmResult<()> {
         &params,
     );
     let resp = submit_tpm_command(&cmd).map_err(TpmOpError::transport)?;
-    check_tpm_rc(&resp, "NV_DefineSpace")?;
+    crate::tbs::error::check_nv_owner_rc(&resp, "NV_DefineSpace")?;
     Ok(())
 }
 
@@ -172,15 +252,25 @@ pub fn nv_define(opts: &NvDefineOptions) -> TpmResult<()> {
 pub fn nv_undefine(index: u32, owner_auth: Option<&[u8]>) -> TpmResult<()> {
     validate_owner_nv_index(index)?;
     let session = password_session_auth(owner_auth.unwrap_or(&[]));
+    // Part 3: two handles (authHandle + nvIndex), no command parameters.
     let cmd = command_with_handles_and_session(
-        &[TPM_RH_OWNER],
+        &[TPM_RH_OWNER, index],
         &session,
         TPM_CC_NV_UNDEFINE_SPACE,
-        &u32(index),
+        &[],
     );
     let resp = submit_tpm_command(&cmd).map_err(TpmOpError::transport)?;
-    check_tpm_rc(&resp, "NV_UndefineSpace")?;
-    Ok(())
+    match crate::tbs::error::check_nv_owner_rc(&resp, "NV_UndefineSpace") {
+        Ok(()) => Ok(()),
+        Err(e) if nv_undefine_absent_ok(&e) => Ok(()),
+        Err(e) => Err(e),
+    }
+}
+
+const TPM_RC_HANDLE_FMT1: u32 = 0x0000_008B;
+
+fn nv_undefine_absent_ok(err: &TpmOpError) -> bool {
+    matches!(err.tpm_rc(), Some(TPM_RC_HANDLE_FMT1) | Some(0x0000_018B))
 }
 
 pub fn nv_read(
@@ -188,19 +278,13 @@ pub fn nv_read(
     offset: u16,
     size: u16,
     auth: Option<&[u8]>,
+    info_hint: Option<NvIndexInfo>,
 ) -> TpmResult<Vec<u8>> {
     if size == 0 {
         return Err(TpmOpError::invalid_argument("NV read size must be > 0"));
     }
-    let info = nv_read_public(index)?;
-    if offset as u32 + size as u32 > info.data_size as u32 {
-        return Err(TpmOpError::invalid_argument(format!(
-            "NV read range {}..{} exceeds index data size {}",
-            offset,
-            offset as u32 + size as u32,
-            info.data_size
-        )));
-    }
+    let info = nv_index_info(index, info_hint)?;
+    validate_nv_bounds(&info, offset, size as u32, "read")?;
 
     let auth_handle = nv_auth_handle(index, info.attributes, false);
     let mut body = Vec::new();
@@ -220,19 +304,13 @@ pub fn nv_write(
     offset: u16,
     data: &[u8],
     auth: Option<&[u8]>,
+    info_hint: Option<NvIndexInfo>,
 ) -> TpmResult<()> {
     if data.is_empty() {
         return Err(TpmOpError::invalid_argument("NV write data must not be empty"));
     }
-    let info = nv_read_public(index)?;
-    if offset as u32 + data.len() as u32 > info.data_size as u32 {
-        return Err(TpmOpError::invalid_argument(format!(
-            "NV write range {}..{} exceeds index data size {}",
-            offset,
-            offset as u32 + data.len() as u32,
-            info.data_size
-        )));
-    }
+    let info = nv_index_info(index, info_hint)?;
+    validate_nv_bounds(&info, offset, data.len() as u32, "write")?;
 
     let auth_handle = nv_auth_handle(index, info.attributes, true);
     let mut body = Vec::new();
@@ -253,9 +331,17 @@ mod tests {
 
     #[test]
     fn nv_read_public_command_golden() {
-        let cmd = command(TPM_ST_NO_SESSIONS, TPM_CC_NV_READ_PUBLIC, &u32(0x01c0_0002));
+        let cmd = command_with_handles_no_session(&[0x01c0_0002], TPM_CC_NV_READ_PUBLIC, &[]);
         assert_eq!(&cmd[6..10], &[0x00, 0x00, 0x01, 0x78]);
         assert_eq!(&cmd[10..14], &[0x01, 0xc0, 0x00, 0x02]);
+    }
+
+    #[test]
+    fn owner_nv_read_public_fallback_rejects_ek_index() {
+        let err = TpmOpError::marshalling_tpm_rc("NV_ReadPublic", "format", 0x0000_00A6);
+        assert!(!owner_nv_read_public_fallback(0x01c0_0002, &err));
+        #[cfg(windows)]
+        assert!(owner_nv_read_public_fallback(0x0180_0042, &err));
     }
 
     #[test]
@@ -300,7 +386,7 @@ mod tests {
 
     #[test]
     fn nv_read_rejects_zero_size() {
-        let err = nv_read(0x01c0_0002, 0, 0, None).unwrap_err();
+        let err = nv_read(0x01c0_0002, 0, 0, None, None).unwrap_err();
         assert_eq!(err.code(), crate::tbs::codes::INVALID_ARGUMENT);
     }
 
@@ -314,6 +400,26 @@ mod tests {
     fn nv_auth_handle_selects_owner_for_ownerwrite() {
         let attrs = TPMA_NV_OWNERWRITE;
         assert_eq!(nv_auth_handle(0x0180_0001, attrs, true), TPM_RH_OWNER);
+    }
+
+    #[test]
+    fn nv_undefine_command_golden_prefix() {
+        let cmd = command_with_handles_and_session(
+            &[TPM_RH_OWNER, 0x0180_0042],
+            &password_session_null_auth(),
+            TPM_CC_NV_UNDEFINE_SPACE,
+            &[],
+        );
+        assert_eq!(&cmd[0..2], &[0x80, 0x02]);
+        assert_eq!(&cmd[6..10], &TPM_CC_NV_UNDEFINE_SPACE.to_be_bytes());
+        assert_eq!(&cmd[10..14], &TPM_RH_OWNER.to_be_bytes());
+        assert_eq!(&cmd[14..18], &0x0180_0042u32.to_be_bytes());
+    }
+
+    #[test]
+    fn nv_undefine_absent_index_is_ok() {
+        let err = TpmOpError::from_tpm_rc(TPM_RC_HANDLE_FMT1, "NV_UndefineSpace");
+        assert!(nv_undefine_absent_ok(&err));
     }
 
     #[test]

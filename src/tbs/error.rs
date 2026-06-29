@@ -222,6 +222,10 @@ impl TpmOpError {
 
     pub fn from_tpm_rc(rc: u32, context: impl Into<String>) -> Self {
         let context = context.into();
+        // FMT1 handle errors (0x8B) are not codec bugs — index/handle not present.
+        if rc == 0x0000_008B || rc == 0x0000_018B {
+            return Self::TpmRc { context, tpm_rc: rc };
+        }
         match classify_tpm_rc(rc) {
             RcClass::Auth => Self::AuthFailed {
                 context,
@@ -306,6 +310,24 @@ pub fn check_pcr_extend_rc(resp: &[u8]) -> TpmResult<()> {
     check_tpm_rc(resp, "PCR_Extend")
 }
 
+/// Owner NV admin commands on Windows: standard users get `TPM_E_COMMAND_BLOCKED` from TBS.
+pub fn check_nv_owner_rc(resp: &[u8], context: &str) -> TpmResult<()> {
+    let rc = crate::tbs::commands::tpm_rc_from_response(resp).ok_or_else(|| {
+        TpmOpError::marshalling(context, "TPM response too short")
+    })?;
+    if rc == 0 {
+        return Ok(());
+    }
+    #[cfg(windows)]
+    if rc == WINDOWS_TPM_E_COMMAND_BLOCKED {
+        return Err(TpmOpError::RequiresElevation {
+            context: context.to_string(),
+            hresult: rc,
+        });
+    }
+    check_tpm_rc(resp, context)
+}
+
 #[cfg(feature = "napi")]
 impl From<TpmOpError> for napi::Error {
     fn from(e: TpmOpError) -> Self {
@@ -355,6 +377,22 @@ mod tests {
             assert_eq!(err.code(), codes::REQUIRES_ELEVATION);
             assert_eq!(err.hresult(), Some(WINDOWS_TPM_E_COMMAND_BLOCKED));
             assert_eq!(err.tpm_rc(), None);
+        }
+        #[cfg(not(windows))]
+        {
+            assert_eq!(err.code(), codes::COMMAND_BLOCKED);
+        }
+    }
+
+    #[test]
+    fn nv_define_command_blocked_maps_to_elevation_on_windows() {
+        let mut resp = vec![0u8; 10];
+        resp[6..10].copy_from_slice(&WINDOWS_TPM_E_COMMAND_BLOCKED.to_be_bytes());
+        let err = super::check_nv_owner_rc(&resp, "NV_DefineSpace").unwrap_err();
+        #[cfg(windows)]
+        {
+            assert_eq!(err.code(), codes::REQUIRES_ELEVATION);
+            assert_eq!(err.hresult(), Some(WINDOWS_TPM_E_COMMAND_BLOCKED));
         }
         #[cfg(not(windows))]
         {

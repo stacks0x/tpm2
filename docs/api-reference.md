@@ -425,6 +425,8 @@ Prefer read-only access to well-known TCG indices. Writes fail with `TPM_RC` / `
 
 **Implemented.** Returns NV index metadata from `NV_ReadPublic` without reading data.
 
+**Windows caveat:** Raw TBS often rejects this command for **owner-range** indices (`0x01800000`–`0x01BFFFFF`) with `MARSHALLING_ERROR` / `TPM_RC` ~`0xA6`, even when the index exists. Factory indices (e.g. EK cert `0x01c00002`) work. After [`tpm.nv.define`](#tpmnvdefineopts-promisevoid), use the known `size` for read/write — the library falls back to owner auth automatically.
+
 **Flat equivalent:** [`Tpm.nvReadPublic(handle)`](#tpm-nvreadpublic).
 
 ---
@@ -444,7 +446,7 @@ type NvDefineOptions = {
 
 **Default attributes:** `OWNERREAD | OWNERWRITE | NO_DA` — read/write via owner auth on `TPM_RH_OWNER`.
 
-**Destructive / privileged:** Consumes TPM NV space until [`tpm.nv.undefine`](#tpmnvundefinehandle-ownerauth). Refuses EK cert indices. **Not for production laptops without intent.**
+**Destructive / privileged:** Consumes TPM NV space until [`tpm.nv.undefine`](#tpmnvundefinehandle-ownerauth). Refuses EK cert indices. **Not for production laptops without intent.** Windows standard user → **`REQUIRES_ELEVATION`** (re-run Admin PowerShell).
 
 **Flat equivalent:** [`Tpm.nvDefine(opts)`](#tpm-nvdefine).
 
@@ -876,7 +878,7 @@ TPM response codes map by class: auth → `AUTH_FAILED`, format → `MARSHALLING
 
 ‡ **`nv.read/write`:** Index permissions vary; EK cert indices are read-only. Writes to undefined indices fail at the TPM.
 
-§ **`nv.define/undefine`:** Owner authorization required; owner NV range only. Destructive on NV space.
+§ **`nv.define/undefine`:** Owner authorization required; owner NV range only. Destructive on NV space. Windows standard user → **`REQUIRES_ELEVATION`**.
 
 Linux requires read/write on `/dev/tpmrm0`. Windows fleet pattern: provision machine AK once elevated → standard users quote forever.
 

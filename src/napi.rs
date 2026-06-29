@@ -430,6 +430,7 @@ pub async fn nv_read(
             offset as u16,
             read_size,
             auth.as_ref().map(|b| b.as_ref()),
+            None,
         )?;
         Ok(Buffer::from(data))
     }
@@ -453,6 +454,7 @@ pub async fn nv_write(opts: NvWriteOptionsJs) -> Result<()> {
             offset as u16,
             &opts.data,
             opts.auth.as_ref().map(|b| b.as_ref()),
+            None,
         )?;
         Ok(())
     }

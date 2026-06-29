@@ -74,4 +74,5 @@ Expected: define → write → read roundtrip → undefine → `nv-smoke: OK`.
 | beta.0 | `NV_UndefineSpace`: nvIndex in params not handles |
 | beta.1 | Same; define elevation mapping |
 | beta.2 | Read/write handles fixed; read **response** not parsed; read params were size→offset |
-| beta.3 | Incorrectly swapped read params to offset→size — **do not use**; fix reverts to TSS size→offset + response parser |
+| beta.3 | Incorrectly swapped read params to offset→size — **do not use** |
+| beta.4 | Reverts read params to TSS size→offset + keeps response parser; full golden test |

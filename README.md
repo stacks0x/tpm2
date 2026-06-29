@@ -20,7 +20,7 @@ const { message, signature } = await ak.quote({
 });
 ```
 
-**Stable** (`0.0.5`). Full public API implemented and validated on real Windows 11 + Intel TPM. [API reference](./docs/api-reference.md) · [Roadmap](./docs/roadmap.md).
+**Stable** (`0.0.6`). Full public API implemented and validated on real Windows 11 + Intel TPM. [API reference](./docs/api-reference.md) · [Roadmap](./docs/roadmap.md).
 
 ---
 

@@ -9,7 +9,7 @@ or depends on downstream products.
 
 ---
 
-## Current state (0.0.5)
+## Current state (0.0.6)
 
 **Shipped and validated on real Windows 11 hardware (Intel TPM, non-virtual):** attestation (user + machine provision, cross-user quote, SYSTEM provision), `random`, `keys` (sign + RSA decrypt), `pcr.read` / `pcr.extend` (admin on Windows), `nv` (read/write/define/undefine/readPublic), `seal` / `unseal`.
 

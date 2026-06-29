@@ -23,6 +23,7 @@ export const MAIN_TARBALL_ALLOWLIST = new Set([
   'docs/api-reference.md',
   'docs/windows-pcp.md',
   'docs/roadmap.md',
+  'SECURITY.md',
 ]);
 
 const SOURCE_FORBIDDEN = [

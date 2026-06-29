@@ -18,7 +18,7 @@ const { message, signature } = await ak.quote({
 });
 ```
 
-**Pre-release** (`0.0.x-beta`). Full public API implemented; validated on real Windows 11 + Intel TPM. [API reference](./docs/api-reference.md) · [Roadmap](./docs/roadmap.md).
+**Stable** (`0.0.5`). Full public API implemented and validated on real Windows 11 + Intel TPM. [API reference](./docs/api-reference.md) · [Roadmap](./docs/roadmap.md).
 
 ---
 
@@ -198,8 +198,9 @@ More detail: [getting-started.md](./docs/getting-started.md) · [api-reference.m
 | **nv** | | | |
 | `tpm.nv.read(...)` | ✓ ‡ | ✓ ‡ | ✓ |
 | `tpm.nv.write(...)` | ✓ ‡ | ✓ ‡ | ✓ |
-| `tpm.nv.define(...)` | ✓ § | ✓ § | ✓ § |
-| `tpm.nv.undefine(...)` | ✓ § | ✓ § | ✓ § |
+| `tpm.nv.readPublic(...)` | ✓ ‡ | ✓ ‡ ¶ | ✓ |
+| `tpm.nv.define(...)` | ✓ § | ✗ → `REQUIRES_ELEVATION` | ✓ § |
+| `tpm.nv.undefine(...)` | ✓ § | ✗ → `REQUIRES_ELEVATION` | ✓ § |
 | `tpm.attest.ekCertificate()` | ✓ | ✓ | ✓ |
 | **keys** | | | |
 | `tpm.keys.create(...)` | ✓ | ✓ | ✓ |
@@ -219,13 +220,15 @@ More detail: [getting-started.md](./docs/getting-started.md) · [api-reference.m
 
 **Windows fleet pattern:** provision machine AK elevated or as SYSTEM once → persist `akBlob` → standard users quote forever after. See [docs/windows-pcp.md](./docs/windows-pcp.md).
 
-**Hardware validation (beta):** Windows 11 Intel TPM — attestation suite, `random`, `keys`, `pcr.read` / `pcr.extend` (elevated), `nv.read`. Linux: CI + swtpm. Firmware or group policy can still deny specific PCR/NV operations — those surface as `TPM_RC` or `REQUIRES_ELEVATION`, not silent failure.
+**Hardware validation (`0.0.5`):** Windows 11 Intel TPM — attestation suite (user + machine AK, cross-user quote, credential activation elevated), `random`, `keys` (sign + RSA decrypt), `pcr.read` / `pcr.extend` (elevated), full `nv` cycle (`define` / `write` / `read` / `undefine` elevated; `read`/`write` standard user on existing indices). Linux: CI + swtpm. Firmware or group policy can still deny specific PCR/NV operations — those surface as `TPM_RC` or `REQUIRES_ELEVATION`, not silent failure.
 
 **‡ `nv.read/write`:** Success depends on index attributes and auth. EK cert indices (`0x01c00002`, `0x01c0000A`) are read-only.
 
 **§ `nv.define/undefine`:** Owner NV range only (`0x01800000`–`0x01BFFFFF`). Requires owner authorization (often empty password). **Consumes NV space** until undefined — use only on test machines or with a chosen index. Windows standard user → **`REQUIRES_ELEVATION`** (same TBS block as `pcr.extend`); run Admin PowerShell.
 
-**Note:** On Windows, raw TBS may reject `nv.readPublic` for owner-range indices (`TPM_RC` ~`0xA6`) even when define/read/write succeed. Factory indices (`0x01c00002` EK cert) work. After `nv.define`, use the known size for read/write; `examples/nv-smoke.mjs` handles this.
+**Note:** On Windows, raw TBS may reject `nv.readPublic` for owner-range indices (`MARSHALLING_ERROR` / `TPM_RC` ~`0xA6`) even when define/read/write succeed. Factory indices (`0x01c00002` EK cert) work. After `nv.define`, use the known size for read/write; `examples/nv-smoke.mjs` handles this.
+
+**¶ `nv.readPublic`:** Works for factory indices (EK cert). Owner-range indices often fail on Windows TBS — use size from `nv.define` or `nv.read` bounds instead.
 
 **† `pcr.extend`:** Linux standard user (prefer indices **16–23** for experiments; avoid **0–7** boot/Secure Boot PCRs). **Windows standard user → `REQUIRES_ELEVATION`** (`TPM_E_COMMAND_BLOCKED` from TBS). Windows Administrator can extend on real hardware (validated). Standard-user failure is not `COMMAND_BLOCKED` — re-run elevated.
 
@@ -401,9 +404,8 @@ When the TPM returns a non-zero response code, the library classifies it:
 | Success | `rc === 0` | (no error) | `0` |
 | Auth | `(rc & 0x0300) === 0x0300` | `AUTH_FAILED` | `0x38E` (`TPM_RC_AUTH_FAIL`) |
 | Format | `(rc & 0xFF00) === 0x0100` or FMT1 bit set | `MARSHALLING_ERROR` | `0x125` (`TPM_RC_ASYMMETRIC`) |
-| Windows TBS blocked | `rc === 0x80280400` | `COMMAND_BLOCKED` * | `0x80280400` |
-
-\* **`PCR_Extend`:** mapped to **`REQUIRES_ELEVATION`** (same `hresult` `0x80280400`) — Administrator can extend on Windows client; standard user should re-run elevated.
+| Windows TBS blocked | `rc === 0x80280400` (most ordinals) | `COMMAND_BLOCKED` | `0x80280400` |
+| Windows TBS blocked | `rc === 0x80280400` (`PCR_Extend`, `NV_DefineSpace`, `NV_UndefineSpace`) | `REQUIRES_ELEVATION` | `0x80280400` |
 | Other | everything else | `TPM_RC` | vendor-specific |
 
 Auth-class and format-class detection follows TPM 2.0 response-code layout (see `src/tbs/rc.rs`). **`tpmRc` on the error is the full 32-bit value** from the TPM response header — use it for logs and TPM spec lookup.
@@ -430,17 +432,21 @@ PCP / NCrypt failures on Windows map through `classify_ncrypt` (`src/tbs/ncrypt.
 
 ---
 
-## API reference
+## API surface (complete)
 
-Subsystem namespaces on `TpmHandle`. See [docs/api-reference.md](./docs/api-reference.md) for full detail.
+Import: `import { Tpm, TpmError } from 'node-tpm2'`. Flat `Tpm.*` wrappers exist for every operation below.
 
-| Namespace | Methods |
-|-----------|---------|
-| `tpm.random` | `bytes(n)` ✅ |
-| `tpm.keys` | `create`, `load`, `KeyHandle.sign`, `KeyHandle.decrypt` ✅ |
-| `tpm.pcr` | `read`, `extend` ✅ |
-| `tpm.nv` | `read`, `write`, `readPublic`, `define`, `undefine` ✅ |
-| `tpm.seal` | `seal`, `unseal` ✅ |
+| Namespace | Methods | Status |
+|-----------|---------|--------|
+| Root | `Tpm.isAvailable()`, `Tpm.open()`, `tpm.info()`, `tpm.readPublic()` | ✅ |
+| `tpm.random` | `bytes(n)` | ✅ |
+| `tpm.pcr` | `read`, `extend` | ✅ |
+| `tpm.nv` | `read`, `write`, `readPublic`, `define`, `undefine` | ✅ |
+| `tpm.keys` | `create`, `load`, `KeyHandle.sign`, `KeyHandle.decrypt`, `KeyHandle.export` | ✅ |
+| `tpm.seal` | `seal`, `unseal` | ✅ |
+| `tpm.attest` | `provisionAk`, `quote`, `ekCertificate`, `AkHandle.activateCredential`, `AkHandle.export`, `AkHandle.publicKeyDer` | ✅ |
+
+Full signatures: [docs/api-reference.md](./docs/api-reference.md).
 
 ---
 
@@ -459,7 +465,7 @@ Subsystem namespaces on `TpmHandle`. See [docs/api-reference.md](./docs/api-refe
 ```bash
 git clone https://github.com/stacks0x/tpm2.git && cd tpm2
 npm install && npm run build
-cargo test --lib
+cargo test --lib -- --skip hw_
 npm run verify:package
 node examples/smoke-test.mjs runtime
 ```

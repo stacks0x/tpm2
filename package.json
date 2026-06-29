@@ -1,6 +1,6 @@
 {
   "name": "node-tpm2",
-  "version": "0.0.5-beta.4",
+  "version": "0.0.5",
   "description": "TPM 2.0 attestation for Node.js — prebuilt native bindings, PCR quotes, and fleet-ready Windows PCP keys. No tpm2-tools.",
   "type": "module",
   "license": "Apache-2.0",
@@ -81,12 +81,12 @@
     "@napi-rs/cli": "^3.7.2"
   },
   "optionalDependencies": {
-    "node-tpm2-windows-x64-msvc": "0.0.5-beta.4",
-    "node-tpm2-windows-arm64-msvc": "0.0.5-beta.4",
-    "node-tpm2-linux-x64-gnu": "0.0.5-beta.4",
-    "node-tpm2-linux-arm64-gnu": "0.0.5-beta.4",
-    "node-tpm2-linux-x64-musl": "0.0.5-beta.4",
-    "node-tpm2-linux-arm64-musl": "0.0.5-beta.4",
-    "node-tpm2-darwin-arm64": "0.0.5-beta.4"
+    "node-tpm2-windows-x64-msvc": "0.0.5",
+    "node-tpm2-windows-arm64-msvc": "0.0.5",
+    "node-tpm2-linux-x64-gnu": "0.0.5",
+    "node-tpm2-linux-arm64-gnu": "0.0.5",
+    "node-tpm2-linux-x64-musl": "0.0.5",
+    "node-tpm2-linux-arm64-musl": "0.0.5",
+    "node-tpm2-darwin-arm64": "0.0.5"
   }
 }

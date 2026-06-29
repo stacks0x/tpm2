@@ -172,6 +172,11 @@ function createTpmHandle() {
     },
 
     nv: {
+      readPublic: wrapNative(async (handle) => {
+        requireNative('nvReadPublic');
+        return native.nvReadPublic(parseTpmHandle(handle));
+      }),
+
       read: wrapNative(async (handle, offset, size, auth) => {
         requireNative('nvRead');
         const buf = await native.nvRead(
@@ -190,6 +195,24 @@ function createTpmHandle() {
           data,
           offset: offset ?? undefined,
           auth: auth ?? undefined,
+        });
+      }),
+
+      define: wrapNative(async (opts) => {
+        requireNative('nvDefine');
+        await native.nvDefine({
+          handle: parseTpmHandle(opts.handle),
+          size: opts.size,
+          auth: opts.auth ?? undefined,
+          ownerAuth: opts.ownerAuth ?? undefined,
+        });
+      }),
+
+      undefine: wrapNative(async (handle, ownerAuth) => {
+        requireNative('nvUndefine');
+        await native.nvUndefine({
+          handle: parseTpmHandle(handle),
+          ownerAuth: ownerAuth ?? undefined,
         });
       }),
     },
@@ -415,6 +438,29 @@ export const Tpm = {
       data,
       offset: offset ?? undefined,
       auth: auth ?? undefined,
+    });
+  }),
+
+  nvReadPublic: wrapNative(async (handle) => {
+    requireNative('nvReadPublic');
+    return native.nvReadPublic(parseTpmHandle(handle));
+  }),
+
+  nvDefine: wrapNative(async (opts) => {
+    requireNative('nvDefine');
+    await native.nvDefine({
+      handle: parseTpmHandle(opts.handle),
+      size: opts.size,
+      auth: opts.auth ?? undefined,
+      ownerAuth: opts.ownerAuth ?? undefined,
+    });
+  }),
+
+  nvUndefine: wrapNative(async (handle, ownerAuth) => {
+    requireNative('nvUndefine');
+    await native.nvUndefine({
+      handle: parseTpmHandle(handle),
+      ownerAuth: ownerAuth ?? undefined,
     });
   }),
 

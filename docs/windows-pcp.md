@@ -7,7 +7,7 @@ On Windows, node-tpm2 uses the **Microsoft Platform Crypto Provider** for attest
 | Operation | Standard user | Elevated admin | SYSTEM |
 |-----------|---------------|----------------|--------|
 | `Tpm.isAvailable()`, PCR read, `readPublic` | Yes | Yes | Yes |
-| `tpm.pcr.extend` | Yes † | No (`REQUIRES_ELEVATION`) | Yes † |
+| `tpm.pcr.extend` | No (`REQUIRES_ELEVATION`) | Yes † | Yes † |
 | `provisionAk()` user scope (`PCP1`) | Yes | Yes | Yes |
 | `quote()` | Yes | Yes | Yes |
 | `provisionAk({ scope: 'machine' })` (`PCP2`) | No | Yes | Yes (production enroll) |

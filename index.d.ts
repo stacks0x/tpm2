@@ -90,6 +90,21 @@ export declare type SealOptions = {
   pcrSelection?: number[];
 };
 
+/** Owner NV index definition (requires owner authorization). */
+export declare type NvDefineOptions = {
+  handle: string | number;
+  size: number;
+  /** Index password when attributes use AUTHREAD/AUTHWRITE. */
+  auth?: Buffer;
+  /** Owner hierarchy password (often empty on consumer TPMs). */
+  ownerAuth?: Buffer;
+};
+
+export declare type NvReadPublicResult = {
+  dataSize: number;
+  attributes: number;
+};
+
 export declare interface AkHandle {
   export(): AkBlob;
   readonly publicKeyDer: Buffer;
@@ -121,6 +136,7 @@ export declare interface TpmHandle {
     bytes(count: number): Promise<Buffer>;
   };
   nv: {
+    readPublic(handle: string | number): Promise<NvReadPublicResult>;
     read(
       handle: string | number,
       offset?: number,
@@ -133,6 +149,8 @@ export declare interface TpmHandle {
       offset?: number,
       auth?: Buffer,
     ): Promise<void>;
+    define(opts: NvDefineOptions): Promise<void>;
+    undefine(handle: string | number, ownerAuth?: Buffer): Promise<void>;
   };
   keys: {
     create(opts: KeyCreateOptions): Promise<KeyHandle>;
@@ -179,6 +197,9 @@ export declare const Tpm: {
     offset?: number,
     auth?: Buffer,
   ): Promise<void>;
+  nvReadPublic(handle: string | number): Promise<NvReadPublicResult>;
+  nvDefine(opts: NvDefineOptions): Promise<void>;
+  nvUndefine(handle: string | number, ownerAuth?: Buffer): Promise<void>;
   seal(opts: SealOptions): Promise<Buffer>;
   unseal(blob: Buffer): Promise<Buffer>;
 };

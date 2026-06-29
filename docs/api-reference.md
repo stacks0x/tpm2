@@ -413,11 +413,48 @@ await tpm.nv.read('0x01800001', 0, undefined, authBuffer);
 |-------|-------------|----------|
 | `0x01c00002`, `0x01c0000A` | EK certificate (RSA / ECC) | **Read-only** (firmware) |
 | `0x01c0000B` | EK template | Read-only |
-| User-defined (`0x01800001`+) | Application data | Requires `NV_DefineSpace` (not exposed) |
+| User-defined (`0x01800001`+) | Application data | **`nv.define` then read/write** |
 
 Prefer read-only access to well-known TCG indices. Writes fail with `TPM_RC` / `AUTH_FAILED` when the index is not writable or auth is wrong.
 
 **Flat equivalent:** [`Tpm.nvRead(handle, offset?, size?, auth?)`](#tpm-nvread).
+
+---
+
+### `tpm.nv.readPublic(handle): Promise<{ dataSize, attributes }>`
+
+**Implemented.** Returns NV index metadata from `NV_ReadPublic` without reading data.
+
+**Flat equivalent:** [`Tpm.nvReadPublic(handle)`](#tpm-nvreadpublic).
+
+---
+
+### `tpm.nv.define(opts): Promise<void>`
+
+**Implemented.** Creates an owner NV index (`TPM2_NV_DefineSpace`).
+
+```typescript
+type NvDefineOptions = {
+  handle: string | number;  // 0x01800000..0x01BFFFFF
+  size: number;             // 1..65535 bytes
+  auth?: Buffer;            // index password (if using AUTH* attributes)
+  ownerAuth?: Buffer;       // owner hierarchy password (often empty)
+};
+```
+
+**Default attributes:** `OWNERREAD | OWNERWRITE | NO_DA` — read/write via owner auth on `TPM_RH_OWNER`.
+
+**Destructive / privileged:** Consumes TPM NV space until [`tpm.nv.undefine`](#tpmnvundefinehandle-ownerauth). Refuses EK cert indices. **Not for production laptops without intent.**
+
+**Flat equivalent:** [`Tpm.nvDefine(opts)`](#tpm-nvdefine).
+
+---
+
+### `tpm.nv.undefine(handle, ownerAuth?): Promise<void>`
+
+**Implemented.** Deletes an owner NV index (`TPM2_NV_UndefineSpace`).
+
+**Flat equivalent:** [`Tpm.nvUndefine(handle, ownerAuth?)`](#tpm-nvundefine).
 
 ---
 
@@ -427,7 +464,7 @@ Prefer read-only access to well-known TCG indices. Writes fail with `TPM_RC` / `
 
 **Under the hood:** `NV_ReadPublic` bounds check → `NV_Write` with owner or index auth (`TPMA_NV_PPWRITE` / `TPMA_NV_AUTHWRITE`).
 
-**Caveats:** Most factory NV indices are read-only. Writing requires a user-defined index provisioned with owner auth (`nv.define` is **not** in the public API).
+**Caveats:** Most factory NV indices are read-only. User-defined indices must be created with [`tpm.nv.define`](#tpmnvdefineopts-promisevoid) first.
 
 **Flat equivalent:** [`Tpm.nvWrite(handle, data, offset?, auth?)`](#tpm-nvwrite).
 
@@ -827,6 +864,7 @@ TPM response codes map by class: auth → `AUTH_FAILED`, format → `MARSHALLING
 | `tpm.random.bytes`, `tpm.pcr.read` | ✓ | ✓ | ✓ |
 | `tpm.pcr.extend` | ✓ † | ✗ → `REQUIRES_ELEVATION` | ✓ † |
 | `tpm.nv.read` / `tpm.nv.write` | ✓ ‡ | ✓ ‡ | ✓ |
+| `tpm.nv.define` / `tpm.nv.undefine` | ✓ § | ✓ § | ✓ § |
 | `tpm.keys.create/load`, `key.sign`, `key.decrypt` | ✓ | ✓ | ✓ |
 | `tpm.seal.seal` / `tpm.seal.unseal` | ✓ | ✓ | ✓ |
 | `tpm.attest.provisionAk()` user scope | ✓ | ✓ | ✓ |
@@ -838,6 +876,8 @@ TPM response codes map by class: auth → `AUTH_FAILED`, format → `MARSHALLING
 
 ‡ **`nv.read/write`:** Index permissions vary; EK cert indices are read-only. Writes to undefined indices fail at the TPM.
 
+§ **`nv.define/undefine`:** Owner authorization required; owner NV range only. Destructive on NV space.
+
 Linux requires read/write on `/dev/tpmrm0`. Windows fleet pattern: provision machine AK once elevated → standard users quote forever.
 
 ---
@@ -846,7 +886,7 @@ Linux requires read/write on `/dev/tpmrm0`. Windows fleet pattern: provision mac
 
 | Feature | Notes |
 |---------|-------|
-| `nv.define` / `nv.undefine` | Owner-auth; deferred per roadmap |
+| *(none — all planned namespaces are implemented)* | See [roadmap](./roadmap.md) for hardening / polish |
 
 ---
 
@@ -861,6 +901,9 @@ Linux requires read/write on `/dev/tpmrm0`. Windows fleet pattern: provision mac
 | PCR extend | `tpm.pcr.extend(i, d)` | `Tpm.pcrExtend(i, d)` | `void` |
 | NV read | `tpm.nv.read(h, off?, sz?, auth?)` | `Tpm.nvRead(...)` | `Buffer` |
 | NV write | `tpm.nv.write(h, data, off?, auth?)` | `Tpm.nvWrite(...)` | `void` |
+| NV readPublic | `tpm.nv.readPublic(h)` | `Tpm.nvReadPublic(h)` | `{ dataSize, attributes }` |
+| NV define | `tpm.nv.define(opts)` | `Tpm.nvDefine(opts)` | `void` |
+| NV undefine | `tpm.nv.undefine(h, ownerAuth?)` | `Tpm.nvUndefine(...)` | `void` |
 | Create key | `tpm.keys.create(opts)` | `Tpm.createKey(opts)` | `KeyHandle` / `{ publicKeyDer, keyBlob }` |
 | Load key | `tpm.keys.load(blob)` | — | `KeyHandle` |
 | Sign | `key.sign(digest)` | `Tpm.signKeyBlob({ keyBlob, digest })` | `Buffer` |
@@ -949,6 +992,9 @@ All public exports from `'node-tpm2'`:
 | `Tpm.decryptKeyBlob` | function | Implemented |
 | `Tpm.nvRead` | function | Implemented |
 | `Tpm.nvWrite` | function | Implemented |
+| `Tpm.nvReadPublic` | function | Implemented |
+| `Tpm.nvDefine` | function | Implemented |
+| `Tpm.nvUndefine` | function | Implemented |
 | `Tpm.seal` | function | Implemented |
 | `Tpm.unseal` | function | Implemented |
 | `TpmHandle.info` | method | Implemented |
@@ -958,6 +1004,9 @@ All public exports from `'node-tpm2'`:
 | `TpmHandle.random.bytes` | method | Implemented |
 | `TpmHandle.nv.read` | method | Implemented |
 | `TpmHandle.nv.write` | method | Implemented |
+| `TpmHandle.nv.readPublic` | method | Implemented |
+| `TpmHandle.nv.define` | method | Implemented |
+| `TpmHandle.nv.undefine` | method | Implemented |
 | `TpmHandle.keys.create` | method | Implemented |
 | `TpmHandle.keys.load` | method | Implemented |
 | `TpmHandle.seal.seal` | method | Implemented |

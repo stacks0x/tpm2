@@ -58,6 +58,9 @@ const REQUIRED_EXPORTS = [
   'keyBlobPublicDer',
   'nvRead',
   'nvWrite',
+  'nvReadPublic',
+  'nvDefine',
+  'nvUndefine',
   'seal',
   'unseal',
 ];

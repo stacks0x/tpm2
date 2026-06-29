@@ -46,7 +46,30 @@ export interface KeyCreateResultJs {
   keyBlob: AkBlobJs
 }
 
+export declare function nvDefine(opts: NvDefineOptionsJs): Promise<void>
+
+export interface NvDefineOptionsJs {
+  handle: string
+  size: number
+  auth?: Buffer
+  ownerAuth?: Buffer
+}
+
 export declare function nvRead(handle: string, offset?: number | undefined | null, size?: number | undefined | null, auth?: Buffer | undefined | null): Promise<Buffer>
+
+export declare function nvReadPublic(handle: string): Promise<NvReadPublicJs>
+
+export interface NvReadPublicJs {
+  dataSize: number
+  attributes: number
+}
+
+export declare function nvUndefine(opts: NvUndefineOptionsJs): Promise<void>
+
+export interface NvUndefineOptionsJs {
+  handle: string
+  ownerAuth?: Buffer
+}
 
 export declare function nvWrite(opts: NvWriteOptionsJs): Promise<void>
 

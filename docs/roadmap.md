@@ -9,25 +9,23 @@ or depends on downstream products.
 
 ---
 
-## Current state (0.0.4-beta)
+## Current state (0.0.5-beta)
 
-**Shipped**
+**Shipped and validated on real Windows 11 hardware (Intel TPM, non-virtual):** attestation (user + machine provision, cross-user quote, SYSTEM provision), `random`, `keys` (sign + RSA decrypt), `pcr.read` / `pcr.extend` (admin on Windows), `nv` (read/write/define/undefine/readPublic), `seal` / `unseal`.
 
 | Namespace | Methods |
 |-----------|---------|
-| Root | `Tpm.isAvailable()`, `Tpm.open()`, `Tpm.info()` |
+| Root | `Tpm.isAvailable()`, `Tpm.open()`, `Tpm.info()`, `tpm.readPublic()` |
+| `tpm.random` | `bytes(n)` |
 | `tpm.pcr` | `read`, `extend` |
+| `tpm.nv` | `read`, `write`, `readPublic`, `define`, `undefine` |
+| `tpm.keys` | `create`, `load`; `KeyHandle.sign`, `export`, `decrypt` |
+| `tpm.seal` | `seal`, `unseal` |
 | `tpm.attest` | `provisionAk`, `quote`, `ekCertificate` |
 | `AkHandle` | `export`, `quote`, `activateCredential`, `publicKeyDer` |
-| Flat | `Tpm.pcrRead`, `Tpm.pcrExtend`, `readPublic`, `readEkCertificate`, `quote`, `provisionAk`, `activateCredential` |
+| Flat | Parity wrappers for all of the above (`Tpm.pcrRead`, `Tpm.nvDefine`, `Tpm.seal`, …) |
 
-**Rust foundation already present (not exposed on `TpmHandle` yet):**
-
-- Command codec: `CreatePrimary`, `Create`, `Load`, `FlushContext`, `Quote`, `GetRandom`, sessions, policy digest
-- Linux key path: `keys.rs` (storage primary, AK create/load)
-- Windows PCP path: `pcp.rs` (identity AK, machine DACL, quote, activation)
-- NV: EK certificate read via fixed index
-- Credential: full activate-credential flow (Linux TBS; Windows PCP)
+**Platform split:** General ops (keys, seal, NV, PCR, random) use TBS on both OSes. Attestation persistence on Windows uses NCrypt PCP (`PCP1` / `PCP2` blobs); Linux uses TBS-wrapped ECDSA AK blobs.
 
 ---
 
@@ -121,7 +119,7 @@ Flat equivalents remain on `Tpm.*` for every operation (thin wrappers over the s
 - [x] JS: `tpm.random.bytes(n)`, `Tpm.randomBytes(n)`
 - [ ] Tests: integration on Linux + Windows VM
 
-### Phase 2 — `tpm.keys` ✅ (this branch; decrypt deferred)
+### Phase 2 — `tpm.keys` ✅
 
 **Goal:** General exportable signing keys via TBS wrapped blobs (both OSes).
 
@@ -138,7 +136,7 @@ Flat equivalents remain on `Tpm.*` for every operation (thin wrappers over the s
 - [x] JS: `tpm.pcr.extend(index, digest)`.
 - [x] Tests: extend → read → digest changed.
 - [x] Caveats: some firmware policies lock PCRs; surface `TPM_RC` / `COMMAND_BLOCKED` cleanly.
-- [ ] Acceptance: works unprivileged on swtpm and dev VM where PCRs are extendable.
+- [x] Acceptance: Linux unprivileged on swtpm/dev VM; **Windows Administrator** on real client hardware (PCR 23 validated).
 
 ### Phase 4 — `tpm.nv` ✅ (this branch)
 
@@ -147,10 +145,10 @@ Flat equivalents remain on `Tpm.*` for every operation (thin wrappers over the s
 - [x] Rust: `nv.read_public(handle)` — size + attributes via `nv_read_public`.
 - [x] `nv.read(handle, offset, size)`.
 - [x] `nv.write(handle, offset, data, auth?)` — optional auth for password-protected indices.
-- [ ] `nv.define` / `nv.undefine` — **defer** unless needed (owner-auth, high privilege).
+- [x] `nv.define` / `nv.undefine` — owner-auth; owner NV range only; refuses EK indices.
 - [x] Migrate `readEkCertificate` to call `nv.read` on well-known EK cert index internally.
-- [x] JS: `tpm.nv.read`, `tpm.nv.write`; document which indices are safe on consumer hardware.
-- [ ] Acceptance: EK cert read unchanged; optional integration test against swtpm-defined NV index.
+- [x] JS: `tpm.nv.read`, `tpm.nv.write`, `tpm.nv.readPublic`, `tpm.nv.define`, `tpm.nv.undefine`; document which indices are safe on consumer hardware.
+- [ ] Acceptance: EK cert read unchanged; optional integration test against swtpm-defined NV index (hardware: use `examples/nv-smoke.mjs` on test machine).
 
 ### Phase 5 — `tpm.seal` / `tpm.unseal` ✅ (this branch)
 
@@ -214,5 +212,5 @@ Phases 1 and 3 can run in parallel after Phase 0. Phase 2 blocks Phase 5. Phase 
 
 ## Versioning
 
-- Implement phases on `dev`; beta publish after each phase or logical group (e.g. beta.4 = random + keys).
+- Implement phases on `dev`; beta publish after each phase or logical group (e.g. **0.0.5-beta.0** = full NV + seal + keys decrypt).
 - `1.0.0` when Phases 0–5 acceptance criteria pass on real hardware and API surface in README matches implementation.

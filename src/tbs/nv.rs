@@ -5,7 +5,7 @@ use crate::tbs::error::{check_tpm_rc, TpmOpError, TpmResult};
 use crate::tbs::parse::ResponseParser;
 use crate::tbs::read_public::parse_handle;
 use crate::tbs::wire::{
-    command, command_with_handles_and_session, password_session_auth, tpm2b, u32,
+    command, command_with_handles_and_session, password_session_auth, tpm2b, tpm2b_empty, u32,
 };
 use crate::tbs::submit_tpm_command;
 
@@ -13,12 +13,27 @@ const TPM_ST_NO_SESSIONS: u16 = 0x8001;
 const TPM_CC_NV_READ: u32 = 0x0000_014E;
 const TPM_CC_NV_READ_PUBLIC: u32 = 0x0000_0178;
 const TPM_CC_NV_WRITE: u32 = 0x0000_0137;
+const TPM_CC_NV_DEFINE_SPACE: u32 = 0x0000_012A;
+const TPM_CC_NV_UNDEFINE_SPACE: u32 = 0x0000_0122;
 const TPM_RH_OWNER: u32 = 0x4000_0001;
+const TPM_ALG_SHA256: u16 = 0x000B;
 
-const TPMA_NV_AUTHREAD: u32 = 0x0000_0004;
-const TPMA_NV_PPREAD: u32 = 0x0000_0008;
-const TPMA_NV_AUTHWRITE: u32 = 0x0000_0001;
-const TPMA_NV_PPWRITE: u32 = 0x0000_0002;
+// TPMA_NV (TPM 2.0 Part 2, Table "TPMA_NV")
+const TPMA_NV_PPWRITE: u32 = 1 << 0;
+const TPMA_NV_OWNERWRITE: u32 = 1 << 1;
+const TPMA_NV_AUTHWRITE: u32 = 1 << 2;
+const TPMA_NV_PPREAD: u32 = 1 << 16;
+const TPMA_NV_OWNERREAD: u32 = 1 << 17;
+const TPMA_NV_AUTHREAD: u32 = 1 << 18;
+const TPMA_NV_NO_DA: u32 = 1 << 27;
+
+/// Default for `nv_define`: owner read/write, no dictionary attack lockout.
+const DEFAULT_NV_DEFINE_ATTRIBUTES: u32 =
+    TPMA_NV_OWNERREAD | TPMA_NV_OWNERWRITE | TPMA_NV_NO_DA;
+
+/// Owner NV index range (TPM 2.0 Part 2).
+const OWNER_NV_INDEX_MIN: u32 = 0x0180_0000;
+const OWNER_NV_INDEX_MAX: u32 = 0x01BF_FFFF;
 
 /// Standard EK certificate NV indices (TCG provisioning).
 const EK_CERT_INDICES: [u32; 2] = [0x01c0_0002, 0x01c0_000A];
@@ -78,6 +93,11 @@ fn nv_auth_handle(index: u32, attributes: u32, for_write: bool) -> u32 {
     } else {
         TPMA_NV_AUTHREAD
     };
+    let owner_bit = if for_write {
+        TPMA_NV_OWNERWRITE
+    } else {
+        TPMA_NV_OWNERREAD
+    };
     let pp_bit = if for_write {
         TPMA_NV_PPWRITE
     } else {
@@ -85,11 +105,82 @@ fn nv_auth_handle(index: u32, attributes: u32, for_write: bool) -> u32 {
     };
     if attributes & auth_bit != 0 {
         index
-    } else if attributes & pp_bit != 0 {
+    } else if attributes & (owner_bit | pp_bit) != 0 {
         TPM_RH_OWNER
     } else {
         index
     }
+}
+
+fn validate_owner_nv_index(index: u32) -> TpmResult<()> {
+    if !(OWNER_NV_INDEX_MIN..=OWNER_NV_INDEX_MAX).contains(&index) {
+        return Err(TpmOpError::invalid_argument(format!(
+            "NV index must be in owner range 0x{OWNER_NV_INDEX_MIN:08X}..=0x{OWNER_NV_INDEX_MAX:08X}, got 0x{index:08X}"
+        )));
+    }
+    if EK_CERT_INDICES.contains(&index) {
+        return Err(TpmOpError::invalid_argument(
+            "refusing to modify well-known EK certificate NV index",
+        ));
+    }
+    Ok(())
+}
+
+fn marshal_nv_public(index: u32, attributes: u32, data_size: u16) -> Vec<u8> {
+    let mut inner = Vec::new();
+    inner.extend_from_slice(&index.to_be_bytes());
+    inner.extend_from_slice(&TPM_ALG_SHA256.to_be_bytes());
+    inner.extend_from_slice(&attributes.to_be_bytes());
+    inner.extend(tpm2b_empty()); // authPolicy
+    inner.extend_from_slice(&data_size.to_be_bytes());
+    tpm2b(&inner)
+}
+
+pub struct NvDefineOptions {
+    pub index: u32,
+    pub size: u16,
+    pub attributes: Option<u32>,
+    /// Password for the NV index (`TPMA_NV_AUTHREAD` / `AUTHWRITE` indices).
+    pub index_auth: Option<Vec<u8>>,
+    /// Owner hierarchy password (often empty on consumer TPMs).
+    pub owner_auth: Option<Vec<u8>>,
+}
+
+/// Create an owner NV index (`TPM2_NV_DefineSpace`). Requires owner authorization.
+pub fn nv_define(opts: &NvDefineOptions) -> TpmResult<()> {
+    validate_owner_nv_index(opts.index)?;
+    if opts.size == 0 {
+        return Err(TpmOpError::invalid_argument("NV define size must be > 0"));
+    }
+    let attributes = opts.attributes.unwrap_or(DEFAULT_NV_DEFINE_ATTRIBUTES);
+    let mut params = Vec::new();
+    params.extend(tpm2b(opts.index_auth.as_deref().unwrap_or(&[])));
+    params.extend(marshal_nv_public(opts.index, attributes, opts.size));
+    let session = password_session_auth(opts.owner_auth.as_deref().unwrap_or(&[]));
+    let cmd = command_with_handles_and_session(
+        &[TPM_RH_OWNER],
+        &session,
+        TPM_CC_NV_DEFINE_SPACE,
+        &params,
+    );
+    let resp = submit_tpm_command(&cmd).map_err(TpmOpError::transport)?;
+    check_tpm_rc(&resp, "NV_DefineSpace")?;
+    Ok(())
+}
+
+/// Delete an owner NV index (`TPM2_NV_UndefineSpace`). Requires owner authorization.
+pub fn nv_undefine(index: u32, owner_auth: Option<&[u8]>) -> TpmResult<()> {
+    validate_owner_nv_index(index)?;
+    let session = password_session_auth(owner_auth.unwrap_or(&[]));
+    let cmd = command_with_handles_and_session(
+        &[TPM_RH_OWNER],
+        &session,
+        TPM_CC_NV_UNDEFINE_SPACE,
+        &u32(index),
+    );
+    let resp = submit_tpm_command(&cmd).map_err(TpmOpError::transport)?;
+    check_tpm_rc(&resp, "NV_UndefineSpace")?;
+    Ok(())
 }
 
 pub fn nv_read(
@@ -158,7 +249,7 @@ pub fn nv_write(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tbs::wire::password_session_null_auth;
+    use crate::tbs::wire::{password_session_null_auth, tpm2b_empty};
 
     #[test]
     fn nv_read_public_command_golden() {
@@ -217,6 +308,55 @@ mod tests {
     fn nv_auth_handle_selects_owner_for_ppread() {
         let attrs = TPMA_NV_PPREAD;
         assert_eq!(nv_auth_handle(0x01c0_0002, attrs, false), TPM_RH_OWNER);
+    }
+
+    #[test]
+    fn nv_auth_handle_selects_owner_for_ownerwrite() {
+        let attrs = TPMA_NV_OWNERWRITE;
+        assert_eq!(nv_auth_handle(0x0180_0001, attrs, true), TPM_RH_OWNER);
+    }
+
+    #[test]
+    fn nv_define_command_golden_prefix() {
+        let attributes = DEFAULT_NV_DEFINE_ATTRIBUTES;
+        let mut params = Vec::new();
+        params.extend(tpm2b_empty());
+        params.extend(marshal_nv_public(0x0180_0001, attributes, 64));
+        let cmd = command_with_handles_and_session(
+            &[TPM_RH_OWNER],
+            &password_session_null_auth(),
+            TPM_CC_NV_DEFINE_SPACE,
+            &params,
+        );
+        assert_eq!(&cmd[0..2], &[0x80, 0x02]);
+        assert_eq!(&cmd[6..10], &TPM_CC_NV_DEFINE_SPACE.to_be_bytes());
+        assert_eq!(&cmd[10..14], &TPM_RH_OWNER.to_be_bytes());
+    }
+
+    #[test]
+    fn nv_define_rejects_ek_index() {
+        let opts = NvDefineOptions {
+            index: 0x01c0_0002,
+            size: 64,
+            attributes: None,
+            index_auth: None,
+            owner_auth: None,
+        };
+        let err = nv_define(&opts).unwrap_err();
+        assert_eq!(err.code(), crate::tbs::codes::INVALID_ARGUMENT);
+    }
+
+    #[test]
+    fn nv_define_rejects_out_of_range_index() {
+        let opts = NvDefineOptions {
+            index: 0x0100_0001,
+            size: 64,
+            attributes: None,
+            index_auth: None,
+            owner_auth: None,
+        };
+        let err = nv_define(&opts).unwrap_err();
+        assert_eq!(err.code(), crate::tbs::codes::INVALID_ARGUMENT);
     }
 
     #[test]

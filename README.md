@@ -18,7 +18,7 @@ const { message, signature } = await ak.quote({
 });
 ```
 
-**Pre-release** (`0.0.x-beta`). [Roadmap](./docs/roadmap.md) for remaining namespaces.
+**Pre-release** (`0.0.x-beta`). Full public API implemented; validated on real Windows 11 + Intel TPM. [API reference](./docs/api-reference.md) · [Roadmap](./docs/roadmap.md).
 
 ---
 
@@ -194,10 +194,12 @@ More detail: [getting-started.md](./docs/getting-started.md) · [api-reference.m
 | `tpm.random.bytes(n)` | ✓ | ✓ | ✓ |
 | **pcr** | | | |
 | `tpm.pcr.read(...)` | ✓ | ✓ | ✓ |
-| `tpm.pcr.extend(i, digest)` | ✓ † | ✗ | ✓ † |
+| `tpm.pcr.extend(i, digest)` | ✓ † | ✗ → `REQUIRES_ELEVATION` | ✓ † |
 | **nv** | | | |
 | `tpm.nv.read(...)` | ✓ ‡ | ✓ ‡ | ✓ |
 | `tpm.nv.write(...)` | ✓ ‡ | ✓ ‡ | ✓ |
+| `tpm.nv.define(...)` | ✓ § | ✓ § | ✓ § |
+| `tpm.nv.undefine(...)` | ✓ § | ✓ § | ✓ § |
 | `tpm.attest.ekCertificate()` | ✓ | ✓ | ✓ |
 | **keys** | | | |
 | `tpm.keys.create(...)` | ✓ | ✓ | ✓ |
@@ -217,9 +219,11 @@ More detail: [getting-started.md](./docs/getting-started.md) · [api-reference.m
 
 **Windows fleet pattern:** provision machine AK elevated or as SYSTEM once → persist `akBlob` → standard users quote forever after. See [docs/windows-pcp.md](./docs/windows-pcp.md).
 
-**Planned rows** are design targets from the [roadmap](./docs/roadmap.md); unprivileged use matches the Phase 0 spike (`GetRandom`, `CreatePrimary` succeeded on Windows 11 without admin). Firmware or group policy can still deny specific PCR/NV operations on Linux — those surface as `TPM_RC`, not silent failure.
+**Hardware validation (beta):** Windows 11 Intel TPM — attestation suite, `random`, `keys`, `pcr.read` / `pcr.extend` (elevated), `nv.read`. Linux: CI + swtpm. Firmware or group policy can still deny specific PCR/NV operations — those surface as `TPM_RC` or `REQUIRES_ELEVATION`, not silent failure.
 
-**‡ `nv.read/write`:** Success depends on index attributes and auth. Well-known EK cert indices (`0x01c00002`, `0x01c0000A`) are read-only. User-defined indices require prior `NV_DefineSpace` (not in public API).
+**‡ `nv.read/write`:** Success depends on index attributes and auth. EK cert indices (`0x01c00002`, `0x01c0000A`) are read-only.
+
+**§ `nv.define/undefine`:** Owner NV range only (`0x01800000`–`0x01BFFFFF`). Requires owner authorization (often empty password). **Consumes NV space** until undefined — use only on test machines or with a chosen index.
 
 **† `pcr.extend`:** Linux standard user (prefer indices **16–23** for experiments; avoid **0–7** boot/Secure Boot PCRs). **Windows standard user → `REQUIRES_ELEVATION`** (`TPM_E_COMMAND_BLOCKED` from TBS). Windows Administrator can extend on real hardware (validated). Standard-user failure is not `COMMAND_BLOCKED` — re-run elevated.
 
@@ -272,7 +276,31 @@ const reloaded = await tpm.keys.load(saved);
 await reloaded.sign(digest);
 ```
 
-Flat: `Tpm.createKey()`, `Tpm.signKeyBlob({ keyBlob, digest })`. RSA `decrypt` is not yet implemented.
+const rsaKey = await tpm.keys.create({ type: 'rsa', sign: true, decrypt: true });
+const plain = await rsaKey.decrypt(ciphertext);
+
+Flat: `Tpm.createKey()`, `Tpm.signKeyBlob({ keyBlob, digest })`, `Tpm.decryptKeyBlob({ keyBlob, cipher })`.
+
+### NV
+
+```javascript
+await tpm.nv.read('0x01c00002');              // EK cert index (read-only on most hardware)
+await tpm.nv.readPublic('0x01800042');        // metadata before read/write
+await tpm.nv.define({ handle: '0x01800042', size: 64 });  // owner NV — test machines only
+await tpm.nv.write('0x01800042', data, 0);
+await tpm.nv.undefine('0x01800042');
+```
+
+Flat: `Tpm.nvRead`, `Tpm.nvWrite`, `Tpm.nvReadPublic`, `Tpm.nvDefine`, `Tpm.nvUndefine`. See `examples/nv-smoke.mjs`.
+
+### Seal
+
+```javascript
+const sealed = await tpm.seal.seal({ data: secret, pcrSelection: [23] });
+const plain = await tpm.seal.unseal(sealed);
+```
+
+Flat: `Tpm.seal`, `Tpm.unseal`.
 
 ### Attestation
 
@@ -408,8 +436,8 @@ Subsystem namespaces on `TpmHandle`. See [docs/api-reference.md](./docs/api-refe
 |-----------|---------|
 | `tpm.random` | `bytes(n)` ✅ |
 | `tpm.keys` | `create`, `load`, `KeyHandle.sign`, `KeyHandle.decrypt` ✅ |
-| `tpm.pcr` | `extend(index, digest)` |
-| `tpm.nv` | `read`, `write` ✅ |
+| `tpm.pcr` | `read`, `extend` ✅ |
+| `tpm.nv` | `read`, `write`, `readPublic`, `define`, `undefine` ✅ |
 | `tpm.seal` | `seal`, `unseal` ✅ |
 
 ---

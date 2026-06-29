@@ -102,6 +102,26 @@ pub struct NvWriteOptionsJs {
     pub auth: Option<Buffer>,
 }
 
+#[napi(object)]
+pub struct NvDefineOptionsJs {
+    pub handle: String,
+    pub size: u32,
+    pub auth: Option<Buffer>,
+    pub owner_auth: Option<Buffer>,
+}
+
+#[napi(object)]
+pub struct NvUndefineOptionsJs {
+    pub handle: String,
+    pub owner_auth: Option<Buffer>,
+}
+
+#[napi(object)]
+pub struct NvReadPublicJs {
+    pub data_size: u32,
+    pub attributes: u32,
+}
+
 #[napi]
 pub async fn random_bytes(count: u32) -> Result<Buffer> {
     #[cfg(not(any(windows, target_os = "linux")))]
@@ -433,6 +453,62 @@ pub async fn nv_write(opts: NvWriteOptionsJs) -> Result<()> {
             offset as u16,
             &opts.data,
             opts.auth.as_ref().map(|b| b.as_ref()),
+        )?;
+        Ok(())
+    }
+}
+
+#[napi]
+pub async fn nv_read_public(handle: String) -> Result<NvReadPublicJs> {
+    #[cfg(not(any(windows, target_os = "linux")))]
+    {
+        return Err(TpmOpError::unavailable("TPM is not available on this platform").into());
+    }
+    #[cfg(any(windows, target_os = "linux"))]
+    {
+        let index = crate::tbs::nv::parse_nv_handle(&handle)?;
+        let info = crate::tbs::nv::nv_read_public(index)?;
+        Ok(NvReadPublicJs {
+            data_size: info.data_size as u32,
+            attributes: info.attributes,
+        })
+    }
+}
+
+#[napi]
+pub async fn nv_define(opts: NvDefineOptionsJs) -> Result<()> {
+    #[cfg(not(any(windows, target_os = "linux")))]
+    {
+        return Err(TpmOpError::unavailable("TPM is not available on this platform").into());
+    }
+    #[cfg(any(windows, target_os = "linux"))]
+    {
+        if opts.size == 0 || opts.size > u16::MAX as u32 {
+            return Err(TpmOpError::invalid_argument("NV define size must be 1..=65535").into());
+        }
+        crate::tbs::nv::nv_define(&crate::tbs::nv::NvDefineOptions {
+            index: crate::tbs::nv::parse_nv_handle(&opts.handle)?,
+            size: opts.size as u16,
+            attributes: None,
+            index_auth: opts.auth.map(|b| b.to_vec()),
+            owner_auth: opts.owner_auth.map(|b| b.to_vec()),
+        })?;
+        Ok(())
+    }
+}
+
+#[napi]
+pub async fn nv_undefine(opts: NvUndefineOptionsJs) -> Result<()> {
+    #[cfg(not(any(windows, target_os = "linux")))]
+    {
+        return Err(TpmOpError::unavailable("TPM is not available on this platform").into());
+    }
+    #[cfg(any(windows, target_os = "linux"))]
+    {
+        let index = crate::tbs::nv::parse_nv_handle(&opts.handle)?;
+        crate::tbs::nv::nv_undefine(
+            index,
+            opts.owner_auth.as_ref().map(|b| b.as_ref()),
         )?;
         Ok(())
     }

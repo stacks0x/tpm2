@@ -82,6 +82,26 @@ pub struct SignKeyBlobOptionsJs {
     pub digest: Buffer,
 }
 
+#[napi(object)]
+pub struct DecryptKeyBlobOptionsJs {
+    pub key_blob: AkBlobJs,
+    pub cipher: Buffer,
+}
+
+#[napi(object)]
+pub struct SealOptionsJs {
+    pub data: Buffer,
+    pub pcr_selection: Option<Vec<u32>>,
+}
+
+#[napi(object)]
+pub struct NvWriteOptionsJs {
+    pub handle: String,
+    pub data: Buffer,
+    pub offset: Option<u32>,
+    pub auth: Option<Buffer>,
+}
+
 #[napi]
 pub async fn random_bytes(count: u32) -> Result<Buffer> {
     #[cfg(not(any(windows, target_os = "linux")))]
@@ -331,5 +351,116 @@ pub async fn sign_key_blob(opts: SignKeyBlobOptionsJs) -> Result<Buffer> {
         };
         let sig = crate::tbs::device_keys::sign_with_key_blob(&blob, &opts.digest)?;
         Ok(Buffer::from(sig))
+    }
+}
+
+#[napi]
+pub async fn decrypt_key_blob(opts: DecryptKeyBlobOptionsJs) -> Result<Buffer> {
+    #[cfg(not(any(windows, target_os = "linux")))]
+    {
+        return Err(TpmOpError::unavailable("TPM is not available on this platform").into());
+    }
+    #[cfg(any(windows, target_os = "linux"))]
+    {
+        let blob = crate::tbs::keys::AkBlob {
+            public: opts.key_blob.public.to_vec(),
+            private: opts.key_blob.private.to_vec(),
+        };
+        let plain = crate::tbs::device_keys::decrypt_with_key_blob(&blob, &opts.cipher)?;
+        Ok(Buffer::from(plain))
+    }
+}
+
+#[napi]
+pub async fn nv_read(
+    handle: String,
+    offset: Option<u32>,
+    size: Option<u32>,
+    auth: Option<Buffer>,
+) -> Result<Buffer> {
+    #[cfg(not(any(windows, target_os = "linux")))]
+    {
+        return Err(TpmOpError::unavailable("TPM is not available on this platform").into());
+    }
+    #[cfg(any(windows, target_os = "linux"))]
+    {
+        let index = crate::tbs::nv::parse_nv_handle(&handle)?;
+        let info = crate::tbs::nv::nv_read_public(index)?;
+        let offset = offset.unwrap_or(0);
+        if offset > u16::MAX as u32 {
+            return Err(TpmOpError::invalid_argument("NV offset exceeds u16 max").into());
+        }
+        let read_size = match size {
+            Some(s) => {
+                if s == 0 || s > u16::MAX as u32 {
+                    return Err(TpmOpError::invalid_argument("NV read size must be 1..=65535").into());
+                }
+                s as u16
+            }
+            None => {
+                let end = info.data_size as u32;
+                if offset >= end {
+                    return Err(TpmOpError::invalid_argument("NV offset beyond index size").into());
+                }
+                (end - offset) as u16
+            }
+        };
+        let data = crate::tbs::nv::nv_read(
+            index,
+            offset as u16,
+            read_size,
+            auth.as_ref().map(|b| b.as_ref()),
+        )?;
+        Ok(Buffer::from(data))
+    }
+}
+
+#[napi]
+pub async fn nv_write(opts: NvWriteOptionsJs) -> Result<()> {
+    #[cfg(not(any(windows, target_os = "linux")))]
+    {
+        return Err(TpmOpError::unavailable("TPM is not available on this platform").into());
+    }
+    #[cfg(any(windows, target_os = "linux"))]
+    {
+        let index = crate::tbs::nv::parse_nv_handle(&opts.handle)?;
+        let offset = opts.offset.unwrap_or(0);
+        if offset > u16::MAX as u32 {
+            return Err(TpmOpError::invalid_argument("NV offset exceeds u16 max").into());
+        }
+        crate::tbs::nv::nv_write(
+            index,
+            offset as u16,
+            &opts.data,
+            opts.auth.as_ref().map(|b| b.as_ref()),
+        )?;
+        Ok(())
+    }
+}
+
+#[napi]
+pub async fn seal(opts: SealOptionsJs) -> Result<Buffer> {
+    #[cfg(not(any(windows, target_os = "linux")))]
+    {
+        return Err(TpmOpError::unavailable("TPM is not available on this platform").into());
+    }
+    #[cfg(any(windows, target_os = "linux"))]
+    {
+        let pcr = opts.pcr_selection.as_deref();
+        let blob = crate::tbs::seal::seal(&opts.data, pcr)?;
+        Ok(Buffer::from(blob))
+    }
+}
+
+#[napi]
+pub async fn unseal(blob: Buffer) -> Result<Buffer> {
+    #[cfg(not(any(windows, target_os = "linux")))]
+    {
+        return Err(TpmOpError::unavailable("TPM is not available on this platform").into());
+    }
+    #[cfg(any(windows, target_os = "linux"))]
+    {
+        let plain = crate::tbs::seal::unseal(&blob)?;
+        Ok(Buffer::from(plain))
     }
 }

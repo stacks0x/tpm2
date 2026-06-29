@@ -54,7 +54,12 @@ const REQUIRED_EXPORTS = [
   'randomBytes',
   'createKey',
   'signKeyBlob',
+  'decryptKeyBlob',
   'keyBlobPublicDer',
+  'nvRead',
+  'nvWrite',
+  'seal',
+  'unseal',
 ];
 
 function assertBinaryExports(nodePath) {

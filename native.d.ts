@@ -15,6 +15,13 @@ export interface AkBlobJs {
 
 export declare function createKey(opts?: KeyCreateOptionsJs | undefined | null): Promise<KeyCreateResultJs>
 
+export declare function decryptKeyBlob(opts: DecryptKeyBlobOptionsJs): Promise<Buffer>
+
+export interface DecryptKeyBlobOptionsJs {
+  keyBlob: AkBlobJs
+  cipher: Buffer
+}
+
 export interface FixedPropertiesJs {
   manufacturer: string
   firmwareVersion: string
@@ -37,6 +44,17 @@ export interface KeyCreateOptionsJs {
 export interface KeyCreateResultJs {
   publicKeyDer: Buffer
   keyBlob: AkBlobJs
+}
+
+export declare function nvRead(handle: string, offset?: number | undefined | null, size?: number | undefined | null, auth?: Buffer | undefined | null): Promise<Buffer>
+
+export declare function nvWrite(opts: NvWriteOptionsJs): Promise<void>
+
+export interface NvWriteOptionsJs {
+  handle: string
+  data: Buffer
+  offset?: number
+  auth?: Buffer
 }
 
 export declare function pcrExtend(index: number, digest: Buffer): Promise<void>
@@ -83,9 +101,18 @@ export interface ReadPublicJs {
   name: Buffer
 }
 
+export declare function seal(opts: SealOptionsJs): Promise<Buffer>
+
+export interface SealOptionsJs {
+  data: Buffer
+  pcrSelection?: Array<number>
+}
+
 export declare function signKeyBlob(opts: SignKeyBlobOptionsJs): Promise<Buffer>
 
 export interface SignKeyBlobOptionsJs {
   keyBlob: AkBlobJs
   digest: Buffer
 }
+
+export declare function unseal(blob: Buffer): Promise<Buffer>

@@ -84,7 +84,7 @@ export declare type KeyCreateOptions = {
   decrypt?: boolean;
 };
 
-/** @throws {TpmError} NOT_SUPPORTED until Phase 5 */
+/** Sealed blob options. */
 export declare type SealOptions = {
   data: Buffer;
   pcrSelection?: number[];
@@ -97,7 +97,7 @@ export declare interface AkHandle {
   activateCredential(opts: ActivateCredentialOptions): Promise<Buffer>;
 }
 
-/** @throws {TpmError} NOT_SUPPORTED until RSA decrypt is implemented */
+/** @throws {TpmError} when key lacks decrypt attribute */
 export declare interface KeyHandle {
   export(): KeyBlob;
   sign(digest: Buffer): Promise<Buffer>;
@@ -121,19 +121,25 @@ export declare interface TpmHandle {
     bytes(count: number): Promise<Buffer>;
   };
   nv: {
-    /** @throws {TpmError} NOT_SUPPORTED until Phase 4 */
-    read(handle: string, offset?: number, size?: number): Promise<Buffer>;
-    /** @throws {TpmError} NOT_SUPPORTED until Phase 4 */
-    write(handle: string, data: Buffer, offset?: number): Promise<void>;
+    read(
+      handle: string | number,
+      offset?: number,
+      size?: number,
+      auth?: Buffer,
+    ): Promise<Buffer>;
+    write(
+      handle: string | number,
+      data: Buffer,
+      offset?: number,
+      auth?: Buffer,
+    ): Promise<void>;
   };
   keys: {
     create(opts: KeyCreateOptions): Promise<KeyHandle>;
     load(blob: KeyBlob): Promise<KeyHandle>;
   };
   seal: {
-    /** @throws {TpmError} NOT_SUPPORTED until Phase 5 */
     seal(opts: SealOptions): Promise<Buffer>;
-    /** @throws {TpmError} NOT_SUPPORTED until Phase 5 */
     unseal(blob: Buffer): Promise<Buffer>;
   };
   attest: {
@@ -160,4 +166,19 @@ export declare const Tpm: {
   activateCredential(opts: ActivateCredentialFlatOptions): Promise<Buffer>;
   createKey(opts?: KeyCreateOptions): Promise<{ publicKeyDer: Buffer; keyBlob: KeyBlob }>;
   signKeyBlob(opts: { keyBlob: KeyBlob; digest: Buffer }): Promise<Buffer>;
+  decryptKeyBlob(opts: { keyBlob: KeyBlob; cipher: Buffer }): Promise<Buffer>;
+  nvRead(
+    handle: string | number,
+    offset?: number,
+    size?: number,
+    auth?: Buffer,
+  ): Promise<Buffer>;
+  nvWrite(
+    handle: string | number,
+    data: Buffer,
+    offset?: number,
+    auth?: Buffer,
+  ): Promise<void>;
+  seal(opts: SealOptions): Promise<Buffer>;
+  unseal(blob: Buffer): Promise<Buffer>;
 };

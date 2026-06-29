@@ -42,11 +42,16 @@ pub fn command(tag: u16, code: u32, body: &[u8]) -> Vec<u8> {
 
 /// Empty-auth password session for hierarchy commands (Owner/Endorsement/Platform).
 pub fn password_session_null_auth() -> Vec<u8> {
-    let mut session = Vec::with_capacity(9);
+    password_session_auth(&[])
+}
+
+/// Password session with an optional auth value (NV index password, etc.).
+pub fn password_session_auth(auth: &[u8]) -> Vec<u8> {
+    let mut session = Vec::with_capacity(9 + auth.len());
     session.extend_from_slice(&TPM_RH_PW.to_be_bytes());
     session.extend(tpm2b_empty()); // nonceCaller
     session.push(0x01); // TPMA_SESSION_CONTINUESESSION
-    session.extend(tpm2b_empty()); // empty auth value
+    session.extend(tpm2b(auth));
     session
 }
 
@@ -147,5 +152,15 @@ pub fn scheme_rsassa_sha256() -> Vec<u8> {
     let mut s = Vec::new();
     s.extend_from_slice(&u16(TPM_ALG_RSASSA));
     s.extend_from_slice(&u16(TPM_ALG_SHA256));
+    s
+}
+
+const TPM_ALG_RSAES: u16 = 0x0016;
+
+/// TPMT_RSA_DECRYPT: RSAES (OAEP) + SHA256.
+pub fn scheme_rsa_oaep_sha256() -> Vec<u8> {
+    let mut s = Vec::new();
+    s.extend_from_slice(&u16(TPM_ALG_SHA256));
+    s.extend_from_slice(&u16(TPM_ALG_RSAES));
     s
 }

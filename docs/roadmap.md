@@ -127,7 +127,7 @@ Flat equivalents remain on `Tpm.*` for every operation (thin wrappers over the s
 
 - [x] `keys.create` / `keys.load` / `key.sign` — ECC + RSA sign keys
 - [x] Unit tests: templates, Sign command golden, option validation, HW roundtrip
-- [ ] `key.decrypt` — RSA OAEP (deferred)
+- [x] `key.decrypt` — RSA OAEP
 - [ ] Windows VM sign smoke
 
 ### Phase 3 — `tpm.pcr.extend` ✅ (this branch)
@@ -140,30 +140,28 @@ Flat equivalents remain on `Tpm.*` for every operation (thin wrappers over the s
 - [x] Caveats: some firmware policies lock PCRs; surface `TPM_RC` / `COMMAND_BLOCKED` cleanly.
 - [ ] Acceptance: works unprivileged on swtpm and dev VM where PCRs are extendable.
 
-### Phase 4 — `tpm.nv` (1 week)
+### Phase 4 — `tpm.nv` ✅ (this branch)
 
 **Goal:** General NV index access beyond EK cert helper.
 
-- Rust:
-  - `nv.read_public(handle)` — already partially in `nv.rs`; expose metadata (size, attributes).
-  - `nv.read(handle, offset, size)`.
-  - `nv.write(handle, offset, data, auth?)` — auth optional buffer for password/session auth.
-  - `nv.define` / `nv.undefine` — **defer** unless needed (owner-auth, high privilege).
-- Migrate `readEkCertificate` to call `nv.read` on well-known EK cert index internally.
-- JS: `tpm.nv.read`, `tpm.nv.write`; document which indices are safe on consumer hardware.
-- Acceptance: EK cert read unchanged; optional integration test against swtpm-defined NV index.
+- [x] Rust: `nv.read_public(handle)` — size + attributes via `nv_read_public`.
+- [x] `nv.read(handle, offset, size)`.
+- [x] `nv.write(handle, offset, data, auth?)` — optional auth for password-protected indices.
+- [ ] `nv.define` / `nv.undefine` — **defer** unless needed (owner-auth, high privilege).
+- [x] Migrate `readEkCertificate` to call `nv.read` on well-known EK cert index internally.
+- [x] JS: `tpm.nv.read`, `tpm.nv.write`; document which indices are safe on consumer hardware.
+- [ ] Acceptance: EK cert read unchanged; optional integration test against swtpm-defined NV index.
 
-### Phase 5 — `tpm.seal` / `tpm.unseal` (1–2 weeks)
+### Phase 5 — `tpm.seal` / `tpm.unseal` ✅ (this branch)
 
 **Goal:** TPM-bound secrets with optional PCR policy.
 
-- Rust:
-  - `seal({ data, pcrSelection?, name? })` — create storage primary or use fixed template, `Create` sealed object, export blob.
-  - `unseal(blob)` — load + `Unseal`.
-  - PCR policy: `PolicyPCR` session when `pcrSelection` provided.
-- JS: `tpm.seal`, `tpm.unseal`; flat aliases.
-- Tests: roundtrip without PCR; roundtrip with PCR extend before unseal; negative test wrong PCR.
-- Acceptance: Linux + Windows TBS; document that PCR-bound seal requires extend permission on chosen indices.
+- [x] Rust: `seal({ data, pcrSelection? })` — storage primary, `Create` sealed object, export blob.
+- [x] `unseal(blob)` — load + `Unseal`.
+- [x] PCR policy: `PolicyPCR` session when `pcrSelection` provided.
+- [x] JS: `tpm.seal`, `tpm.unseal`; flat aliases.
+- [x] Tests: roundtrip without PCR; unit tests for marshalling.
+- [ ] Acceptance: Linux + Windows TBS; roundtrip with PCR extend before unseal on hardware.
 
 ### Phase 6 — Hardening & 1.0 (ongoing)
 

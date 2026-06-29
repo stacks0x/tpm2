@@ -27,7 +27,7 @@ import { Tpm, TpmError } from 'node-tpm2';
 11. [Error model (`TpmError`)](#error-model-tpmerror)
 12. [Platform differences](#platform-differences)
 13. [Privilege matrix](#privilege-matrix)
-14. [Planned / not yet implemented](#planned--not-yet-implemented)
+14. [Deferred / not in public API](#deferred--not-in-public-api)
 15. [Symbol index](#symbol-index)
 
 ---
@@ -66,7 +66,7 @@ flowchart TB
 
 **Design rules:**
 
-- **General keys, PCR, random, ReadPublic, seal (planned)** use the shared TBS command path on both Linux and Windows so blobs and behavior stay aligned.
+- **General keys, PCR, random, ReadPublic, NV, seal** use the shared TBS command path on both Linux and Windows so blobs and behavior stay aligned.
 - **Attestation key persistence on Windows** uses NCrypt Platform Crypto Provider (PCP) because raw TBS cannot persist cross-user identity keys reliably.
 - **Transient TPM handles** are created and flushed inside each native call. You do not manage TPM handle slots in JavaScript.
 
@@ -394,15 +394,42 @@ Returned by `Tpm.open()`. All sub-namespaces are plain objects with async method
 
 ---
 
-### `tpm.nv.read(handle, offset?, size?)`
+### `tpm.nv.read(handle, offset?, size?, auth?)`
 
-**NOT_SUPPORTED** — throws `NOT_SUPPORTED`. Planned Phase 4. EK certificate today uses internal NV read only via `ekCertificate()`.
+**Implemented.**
+
+```typescript
+// handle: hex string ('0x01c00002') or number
+await tpm.nv.read('0x01c00002');
+await tpm.nv.read('0x01c00002', 0, 512);
+await tpm.nv.read('0x01800001', 0, undefined, authBuffer);
+```
+
+**Under the hood:** `NV_ReadPublic` → size/attribute check → `NV_Read` with owner or index auth (based on `TPMA_NV_PPREAD` / `TPMA_NV_AUTHREAD`). Optional `auth` supplies the index password for `AUTHREAD` indices.
+
+**Safe indices on consumer hardware:**
+
+| Index | Typical use | Writable |
+|-------|-------------|----------|
+| `0x01c00002`, `0x01c0000A` | EK certificate (RSA / ECC) | **Read-only** (firmware) |
+| `0x01c0000B` | EK template | Read-only |
+| User-defined (`0x01800001`+) | Application data | Requires `NV_DefineSpace` (not exposed) |
+
+Prefer read-only access to well-known TCG indices. Writes fail with `TPM_RC` / `AUTH_FAILED` when the index is not writable or auth is wrong.
+
+**Flat equivalent:** [`Tpm.nvRead(handle, offset?, size?, auth?)`](#tpm-nvread).
 
 ---
 
-### `tpm.nv.write(handle, data, offset?)`
+### `tpm.nv.write(handle, data, offset?, auth?)`
 
-**NOT_SUPPORTED** — throws `NOT_SUPPORTED`. Planned Phase 4.
+**Implemented.**
+
+**Under the hood:** `NV_ReadPublic` bounds check → `NV_Write` with owner or index auth (`TPMA_NV_PPWRITE` / `TPMA_NV_AUTHWRITE`).
+
+**Caveats:** Most factory NV indices are read-only. Writing requires a user-defined index provisioned with owner auth (`nv.define` is **not** in the public API).
+
+**Flat equivalent:** [`Tpm.nvWrite(handle, data, offset?, auth?)`](#tpm-nvwrite).
 
 ---
 
@@ -414,7 +441,7 @@ Returned by `Tpm.open()`. All sub-namespaces are plain objects with async method
 type KeyCreateOptions = {
   type: 'ecc' | 'rsa';
   sign?: boolean;    // default true
-  decrypt?: boolean; // default false; RSA only when implemented
+  decrypt?: boolean; // default false; RSA only
 };
 ```
 
@@ -452,7 +479,32 @@ At least one of `sign` or `decrypt` must be true. `decrypt: true` with `type: 'e
 
 ### `tpm.seal.seal(opts)` / `tpm.seal.unseal(blob)`
 
-**NOT_SUPPORTED** — throws `NOT_SUPPORTED`. Planned Phase 5.
+**Implemented.**
+
+```typescript
+type SealOptions = {
+  data: Buffer;
+  pcrSelection?: number[]; // SHA-256 bank; binds to current PCR values at seal time
+};
+
+const sealed = await tpm.seal.seal({ data: secret });
+const plain = await tpm.seal.unseal(sealed);
+
+// PCR-bound: unseal fails if PCR state changes
+const bound = await tpm.seal.seal({ data: secret, pcrSelection: [7] });
+```
+
+**Under the hood:**
+
+1. `CreatePrimary` — transient storage primary.
+2. Optional `PolicyPCR` session when `pcrSelection` is set; policy digest embedded in sealed object.
+3. `Create` — keyedhash sealed object (`fixedTPM | fixedParent | userWithAuth | noDA`).
+4. Export `SEAL` wire blob (public + private + PCR metadata).
+5. `unseal`: load + `Unseal` (with matching `PolicyPCR` when bound).
+
+**Caveats:** PCR-bound seal requires the chosen PCRs to match at unseal time. `tpm.pcr.extend` on Windows needs elevation for many indices.
+
+**Flat equivalents:** [`Tpm.seal(opts)`](#tpm-sealopts), [`Tpm.unseal(blob)`](#tpm-unsealblob).
 
 ---
 
@@ -464,7 +516,7 @@ At least one of `sign` or `decrypt` must be true. `decrypt: true` with `type: 'e
 
 **Use for:** Chain-of-trust to manufacturer EK cert in attestation verification.
 
-**Not for:** General NV index access ([planned](#tpm-nv)).
+**Not for:** Attestation quotes (use `attest.provisionAk`). For general NV access use [`tpm.nv.read`](#tpmnvreadhandle-offset-size-auth).
 
 ---
 
@@ -563,7 +615,13 @@ Returned by `tpm.keys.create()` and `tpm.keys.load()`.
 
 ### `key.decrypt(cipher)`
 
-**NOT_SUPPORTED** — throws `NOT_SUPPORTED`. RSA OAEP decrypt planned for keys created with `decrypt: true`.
+**Implemented.** RSA OAEP (SHA-256) via `TPM2_RSA_Decrypt`. Key must have been created with `decrypt: true` (RSA only).
+
+**Under the hood:** Regenerate storage primary → `Load` → `RSA_Decrypt` with explicit OAEP scheme → flush.
+
+**Use for:** Decrypting ciphertext produced for the TPM RSA key's public half.
+
+**Not for:** ECC keys or sign-only RSA keys (`INVALID_ARGUMENT`).
 
 ---
 
@@ -731,7 +789,7 @@ Native Rust errors serialize as `__tpm2__code|message|suggestion|tpmRc|hresult` 
 | `ACCESS_DENIED` | OS denied device access (Linux permissions, container) |
 | `REQUIRES_ELEVATION` | Windows Admin/SYSTEM required (machine AK, activation) |
 | `COMMAND_BLOCKED` | Windows TBS driver blocked command ordinal |
-| `NOT_SUPPORTED` | Unimplemented JS stub or PCP/TBS capability gap |
+| `NOT_SUPPORTED` | PCP/TBS capability gap on this platform | — | sometimes | — |
 | `INVALID_ARGUMENT` | Bad options (wrong digest size, invalid key type, empty `keyName`) |
 | `KEY_NOT_FOUND` | NCrypt persisted key missing |
 | `ALREADY_EXISTS` | NCrypt key name collision (`overwrite: false`) |
@@ -768,32 +826,27 @@ TPM response codes map by class: auth → `AUTH_FAILED`, format → `MARSHALLING
 | `Tpm.isAvailable()`, `open()`, `info()` | ✓ | ✓ | ✓ |
 | `tpm.random.bytes`, `tpm.pcr.read` | ✓ | ✓ | ✓ |
 | `tpm.pcr.extend` | ✓ † | ✗ → `REQUIRES_ELEVATION` | ✓ † |
-| `tpm.keys.create/load`, `key.sign` | ✓ | ✓ | ✓ |
+| `tpm.nv.read` / `tpm.nv.write` | ✓ ‡ | ✓ ‡ | ✓ |
+| `tpm.keys.create/load`, `key.sign`, `key.decrypt` | ✓ | ✓ | ✓ |
+| `tpm.seal.seal` / `tpm.seal.unseal` | ✓ | ✓ | ✓ |
 | `tpm.attest.provisionAk()` user scope | ✓ | ✓ | ✓ |
 | `tpm.attest.provisionAk({ scope: 'machine' })` | — | ✗ | ✓ |
 | `ak.quote` / `Tpm.quote` | ✓ | ✓ | ✓ |
 | `ak.activateCredential` | ✓ | ✗ | ✓ |
-| `tpm.nv.*` (planned) | ✓* | ✓* | ✓ |
 
 † **`pcr.extend`:** Linux user OK (avoid boot PCRs 0–7). Windows user blocked → **`REQUIRES_ELEVATION`**; Admin/SYSTEM OK. See [windows-pcp.md](./windows-pcp.md).
 
-\* Planned; firmware/policy may still deny.
+‡ **`nv.read/write`:** Index permissions vary; EK cert indices are read-only. Writes to undefined indices fail at the TPM.
 
 Linux requires read/write on `/dev/tpmrm0`. Windows fleet pattern: provision machine AK once elevated → standard users quote forever.
 
 ---
 
-## Planned / not yet implemented
+## Deferred / not in public API
 
-These methods exist on `TpmHandle` but **throw `TpmError` with code `NOT_SUPPORTED`** at call time:
-
-| Method | Phase | Notes |
-|--------|-------|-------|
-| `tpm.nv.read/write` | 4 | General NV; EK cert uses internal path today |
-| `tpm.seal.seal` / `tpm.seal.unseal` | 5 | PCR-bound sealed storage |
-| `key.decrypt(cipher)` | 2+ | RSA OAEP for decrypt keys |
-
-Roadmap detail: [roadmap.md](./roadmap.md).
+| Feature | Notes |
+|---------|-------|
+| `nv.define` / `nv.undefine` | Owner-auth; deferred per roadmap |
 
 ---
 
@@ -806,12 +859,13 @@ Roadmap detail: [roadmap.md](./roadmap.md).
 | Random | `tpm.random.bytes(n)` | `Tpm.randomBytes(n)` | `Buffer` |
 | PCR read | `tpm.pcr.read(sel, bank?)` | `Tpm.pcrRead(sel, bank?)` | `Record<number, string>` |
 | PCR extend | `tpm.pcr.extend(i, d)` | `Tpm.pcrExtend(i, d)` | `void` |
-| NV | `tpm.nv.read/write` | — | **NOT_SUPPORTED** |
+| NV read | `tpm.nv.read(h, off?, sz?, auth?)` | `Tpm.nvRead(...)` | `Buffer` |
+| NV write | `tpm.nv.write(h, data, off?, auth?)` | `Tpm.nvWrite(...)` | `void` |
 | Create key | `tpm.keys.create(opts)` | `Tpm.createKey(opts)` | `KeyHandle` / `{ publicKeyDer, keyBlob }` |
 | Load key | `tpm.keys.load(blob)` | — | `KeyHandle` |
 | Sign | `key.sign(digest)` | `Tpm.signKeyBlob({ keyBlob, digest })` | `Buffer` |
-| Decrypt | `key.decrypt(cipher)` | — | **NOT_SUPPORTED** |
-| Seal | `tpm.seal.seal/unseal` | — | **NOT_SUPPORTED** |
+| Decrypt | `key.decrypt(cipher)` | `Tpm.decryptKeyBlob({ keyBlob, cipher })` | `Buffer` |
+| Seal | `tpm.seal.seal/unseal` | `Tpm.seal` / `Tpm.unseal` | `Buffer` |
 | EK cert | `tpm.attest.ekCertificate()` | `Tpm.readEkCertificate()` | `Buffer \| null` |
 | Provision AK | `tpm.attest.provisionAk(opts)` | `Tpm.provisionAk(opts)` | `AkHandle` / `{ akPublicDer, akBlob }` |
 | Quote | `ak.quote(opts)` / `tpm.attest.quote(opts)` | `Tpm.quote({ akBlob, ... })` | `QuoteResult` |
@@ -892,17 +946,22 @@ All public exports from `'node-tpm2'`:
 | `Tpm.activateCredential` | function | Implemented |
 | `Tpm.createKey` | function | Implemented |
 | `Tpm.signKeyBlob` | function | Implemented |
+| `Tpm.decryptKeyBlob` | function | Implemented |
+| `Tpm.nvRead` | function | Implemented |
+| `Tpm.nvWrite` | function | Implemented |
+| `Tpm.seal` | function | Implemented |
+| `Tpm.unseal` | function | Implemented |
 | `TpmHandle.info` | method | Implemented |
 | `TpmHandle.readPublic` | method | Implemented |
 | `TpmHandle.pcr.read` | method | Implemented |
 | `TpmHandle.pcr.extend` | method | Implemented |
 | `TpmHandle.random.bytes` | method | Implemented |
-| `TpmHandle.nv.read` | method | **NOT_SUPPORTED** |
-| `TpmHandle.nv.write` | method | **NOT_SUPPORTED** |
+| `TpmHandle.nv.read` | method | Implemented |
+| `TpmHandle.nv.write` | method | Implemented |
 | `TpmHandle.keys.create` | method | Implemented |
 | `TpmHandle.keys.load` | method | Implemented |
-| `TpmHandle.seal.seal` | method | **NOT_SUPPORTED** |
-| `TpmHandle.seal.unseal` | method | **NOT_SUPPORTED** |
+| `TpmHandle.seal.seal` | method | Implemented |
+| `TpmHandle.seal.unseal` | method | Implemented |
 | `TpmHandle.attest.ekCertificate` | method | Implemented |
 | `TpmHandle.attest.provisionAk` | method | Implemented |
 | `TpmHandle.attest.quote` | method | Implemented |
@@ -910,7 +969,7 @@ All public exports from `'node-tpm2'`:
 | `KeyHandle.export` | method | Implemented |
 | `KeyHandle.publicKeyDer` | getter | Implemented |
 | `KeyHandle.sign` | method | Implemented |
-| `KeyHandle.decrypt` | method | **NOT_SUPPORTED** |
+| `KeyHandle.decrypt` | method | Implemented |
 | `AkHandle.export` | method | Implemented |
 | `AkHandle.publicKeyDer` | getter | Implemented |
 | `AkHandle.quote` | method | Implemented |

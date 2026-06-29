@@ -8,12 +8,13 @@ use crate::tbs::parse::{parameters_after_rc, ResponseParser};
 use crate::tbs::read_public::public_wire_to_spki_der;
 use crate::tbs::wire::{
     asym_scheme_null, command_with_password_session, kdf_scheme_null, scheme_ecdsa_sha256,
-    scheme_rsassa_sha256, tpm2b, tpm2b_empty, u16, u32,
+    scheme_rsa_oaep_sha256, scheme_rsassa_sha256, tpm2b, tpm2b_empty, u16, u32,
 };
 use crate::tbs::submit_tpm_command;
 
 const TPM_CC_CREATE: u32 = 0x0000_0153;
 const TPM_CC_SIGN: u32 = 0x0000_015D;
+const TPM_CC_RSA_DECRYPT: u32 = 0x0000_015E;
 const TPM_ALG_ECC: u16 = 0x0023;
 const TPM_ALG_RSA: u16 = 0x0001;
 const TPM_ALG_SHA256: u16 = 0x000B;
@@ -25,6 +26,7 @@ const TPM_RH_NULL: u32 = 0x4000_0007;
 const SIGNING_KEY_ATTRIBUTES: u32 = 0x0004_0072;
 /// signing attributes + decrypt (RSA only)
 const SIGNING_DECRYPT_KEY_ATTRIBUTES: u32 = 0x0006_0072;
+const TPMA_OBJECT_DECRYPT: u32 = 0x0002_0000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeyType {
@@ -228,6 +230,47 @@ pub fn sign_with_key_blob(blob: &AkBlob, digest: &[u8]) -> TpmResult<Vec<u8>> {
     with_loaded_key(blob, |handle| sign_digest(handle, digest))
 }
 
+fn key_blob_has_decrypt(blob: &AkBlob) -> TpmResult<bool> {
+    ensure_tbs_key_blob(blob)?;
+    let wire = &blob.public;
+    if wire.len() < 2 + 8 {
+        return Err(TpmOpError::other("invalid key blob public area"));
+    }
+    let size = u16::from_be_bytes([wire[0], wire[1]]) as usize;
+    if wire.len() < 2 + size {
+        return Err(TpmOpError::other("invalid key blob public area"));
+    }
+    // TPMT_PUBLIC: type(2) + nameAlg(2) + objectAttributes(4)
+    let attrs = u32::from_be_bytes([wire[6], wire[7], wire[8], wire[9]]);
+    Ok(attrs & TPMA_OBJECT_DECRYPT != 0)
+}
+
+pub fn rsa_decrypt(decrypt_handle: u32, cipher: &[u8]) -> TpmResult<Vec<u8>> {
+    if cipher.is_empty() {
+        return Err(TpmOpError::invalid_argument("cipher must not be empty"));
+    }
+    let mut params = Vec::new();
+    params.extend(scheme_rsa_oaep_sha256());
+    params.extend(tpm2b(cipher));
+    params.extend(tpm2b_empty()); // label
+
+    let cmd = command_with_password_session(decrypt_handle, TPM_CC_RSA_DECRYPT, &params);
+    let resp = submit_tpm_command(&cmd).map_err(TpmOpError::transport)?;
+    check_tpm_rc(&resp, "RSA_Decrypt")?;
+
+    let mut parser = parameters_after_rc(&resp)?;
+    parser.read_tpm2b()
+}
+
+pub fn decrypt_with_key_blob(blob: &AkBlob, cipher: &[u8]) -> TpmResult<Vec<u8>> {
+    if !key_blob_has_decrypt(blob)? {
+        return Err(TpmOpError::invalid_argument(
+            "key was not created with decrypt: true",
+        ));
+    }
+    with_loaded_key(blob, |handle| rsa_decrypt(handle, cipher))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -272,8 +315,32 @@ mod tests {
     }
 
     #[test]
+    fn rsa_decrypt_command_golden_prefix() {
+        let cipher = [0xABu8; 16];
+        let mut params = Vec::new();
+        params.extend(scheme_rsa_oaep_sha256());
+        params.extend(tpm2b(&cipher));
+        params.extend(tpm2b_empty());
+        let cmd = command_with_password_session(0x80FF_FFFF, TPM_CC_RSA_DECRYPT, &params);
+        assert_eq!(&cmd[0..2], &[0x80, 0x02]);
+        assert_eq!(&cmd[6..10], &TPM_CC_RSA_DECRYPT.to_be_bytes());
+    }
+
+    #[test]
     fn parse_options_rejects_ecc_decrypt() {
         let err = parse_key_create_options(Some("ecc"), Some(true), Some(true)).unwrap_err();
+        assert_eq!(err.code(), crate::tbs::codes::INVALID_ARGUMENT);
+    }
+
+    #[test]
+    fn decrypt_rejects_non_decrypt_key() {
+        let opts = KeyCreateOptions::default();
+        let template = public_key_template(&opts).expect("template");
+        let blob = AkBlob {
+            public: template,
+            private: vec![0x00, 0x00],
+        };
+        let err = decrypt_with_key_blob(&blob, &[0u8; 16]).unwrap_err();
         assert_eq!(err.code(), crate::tbs::codes::INVALID_ARGUMENT);
     }
 

@@ -66,10 +66,11 @@ export class TpmError extends Error {
   }
 }
 
-function notSupported(feature) {
-  return async () => {
-    throw new TpmError('NOT_SUPPORTED', `${feature} is not implemented yet.`);
-  };
+function parseTpmHandle(handle) {
+  if (typeof handle === 'number') {
+    return `0x${handle.toString(16).padStart(8, '0')}`;
+  }
+  return handle;
 }
 
 function createKeyHandle(publicKeyDer, keyBlob) {
@@ -94,7 +95,14 @@ function createKeyHandle(publicKeyDer, keyBlob) {
       return Buffer.from(sig);
     }),
 
-    decrypt: notSupported('key.decrypt'),
+    decrypt: wrapNative(async (cipher) => {
+      requireNative('decryptKeyBlob');
+      const plain = await native.decryptKeyBlob({
+        keyBlob,
+        cipher,
+      });
+      return Buffer.from(plain);
+    }),
   };
 }
 
@@ -164,8 +172,26 @@ function createTpmHandle() {
     },
 
     nv: {
-      read: notSupported('tpm.nv.read'),
-      write: notSupported('tpm.nv.write'),
+      read: wrapNative(async (handle, offset, size, auth) => {
+        requireNative('nvRead');
+        const buf = await native.nvRead(
+          parseTpmHandle(handle),
+          offset ?? undefined,
+          size ?? undefined,
+          auth ?? undefined,
+        );
+        return Buffer.from(buf);
+      }),
+
+      write: wrapNative(async (handle, data, offset, auth) => {
+        requireNative('nvWrite');
+        await native.nvWrite({
+          handle: parseTpmHandle(handle),
+          data,
+          offset: offset ?? undefined,
+          auth: auth ?? undefined,
+        });
+      }),
     },
 
     keys: {
@@ -187,8 +213,20 @@ function createTpmHandle() {
     },
 
     seal: {
-      seal: notSupported('tpm.seal'),
-      unseal: notSupported('tpm.unseal'),
+      seal: wrapNative(async (opts) => {
+        requireNative('seal');
+        const buf = await native.seal({
+          data: opts.data,
+          pcrSelection: opts.pcrSelection,
+        });
+        return Buffer.from(buf);
+      }),
+
+      unseal: wrapNative(async (blob) => {
+        requireNative('unseal');
+        const plain = await native.unseal(blob);
+        return Buffer.from(plain);
+      }),
     },
 
     attest: {
@@ -351,5 +389,47 @@ export const Tpm = {
     requireNative('signKeyBlob');
     const sig = await native.signKeyBlob(opts);
     return Buffer.from(sig);
+  }),
+
+  decryptKeyBlob: wrapNative(async (opts) => {
+    requireNative('decryptKeyBlob');
+    const plain = await native.decryptKeyBlob(opts);
+    return Buffer.from(plain);
+  }),
+
+  nvRead: wrapNative(async (handle, offset, size, auth) => {
+    requireNative('nvRead');
+    const buf = await native.nvRead(
+      parseTpmHandle(handle),
+      offset ?? undefined,
+      size ?? undefined,
+      auth ?? undefined,
+    );
+    return Buffer.from(buf);
+  }),
+
+  nvWrite: wrapNative(async (handle, data, offset, auth) => {
+    requireNative('nvWrite');
+    await native.nvWrite({
+      handle: parseTpmHandle(handle),
+      data,
+      offset: offset ?? undefined,
+      auth: auth ?? undefined,
+    });
+  }),
+
+  seal: wrapNative(async (opts) => {
+    requireNative('seal');
+    const buf = await native.seal({
+      data: opts.data,
+      pcrSelection: opts.pcrSelection,
+    });
+    return Buffer.from(buf);
+  }),
+
+  unseal: wrapNative(async (blob) => {
+    requireNative('unseal');
+    const plain = await native.unseal(blob);
+    return Buffer.from(plain);
   }),
 };

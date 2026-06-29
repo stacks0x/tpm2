@@ -196,17 +196,17 @@ More detail: [getting-started.md](./docs/getting-started.md) · [api-reference.m
 | `tpm.pcr.read(...)` | ✓ | ✓ | ✓ |
 | `tpm.pcr.extend(i, digest)` | ✓ † | ✗ | ✓ † |
 | **nv** | | | |
-| `tpm.nv.read(...)` | ✓ *planned* | ✓ *planned* | ✓ |
-| `tpm.nv.write(...)` | ✓ *planned* | ✓ *planned* | ✓ |
+| `tpm.nv.read(...)` | ✓ ‡ | ✓ ‡ | ✓ |
+| `tpm.nv.write(...)` | ✓ ‡ | ✓ ‡ | ✓ |
 | `tpm.attest.ekCertificate()` | ✓ | ✓ | ✓ |
 | **keys** | | | |
 | `tpm.keys.create(...)` | ✓ | ✓ | ✓ |
 | `tpm.keys.load(blob)` | ✓ | ✓ | ✓ |
 | `key.sign(digest)` | ✓ | ✓ | ✓ |
-| `key.decrypt(cipher)` | — *planned* | — *planned* | — *planned* |
+| `key.decrypt(cipher)` | ✓ | ✓ | ✓ |
 | **seal** | | | |
-| `tpm.seal(...)` | ✓ *planned* | ✓ *planned* | ✓ |
-| `tpm.unseal(blob)` | ✓ *planned* | ✓ *planned* | ✓ |
+| `tpm.seal.seal(...)` | ✓ | ✓ | ✓ |
+| `tpm.unseal(blob)` | ✓ | ✓ | ✓ |
 | **attest** | | | |
 | `tpm.attest.provisionAk()` user | ✓ | ✓ | ✓ |
 | `tpm.attest.provisionAk({ scope: 'machine' })` | — | ✗ | ✓ |
@@ -218,6 +218,8 @@ More detail: [getting-started.md](./docs/getting-started.md) · [api-reference.m
 **Windows fleet pattern:** provision machine AK elevated or as SYSTEM once → persist `akBlob` → standard users quote forever after. See [docs/windows-pcp.md](./docs/windows-pcp.md).
 
 **Planned rows** are design targets from the [roadmap](./docs/roadmap.md); unprivileged use matches the Phase 0 spike (`GetRandom`, `CreatePrimary` succeeded on Windows 11 without admin). Firmware or group policy can still deny specific PCR/NV operations on Linux — those surface as `TPM_RC`, not silent failure.
+
+**‡ `nv.read/write`:** Success depends on index attributes and auth. Well-known EK cert indices (`0x01c00002`, `0x01c0000A`) are read-only. User-defined indices require prior `NV_DefineSpace` (not in public API).
 
 **† `pcr.extend`:** Linux standard user (prefer indices **16–23** for experiments; avoid **0–7** boot/Secure Boot PCRs). **Windows standard user → `REQUIRES_ELEVATION`** (`TPM_E_COMMAND_BLOCKED` from TBS). Windows Administrator can extend on real hardware (validated). Standard-user failure is not `COMMAND_BLOCKED` — re-run elevated.
 
@@ -398,16 +400,17 @@ PCP / NCrypt failures on Windows map through `classify_ncrypt` (`src/tbs/ncrypt.
 
 ---
 
-## API reference (planned)
+## API reference
 
-Subsystem namespaces not yet on `TpmHandle`. See [docs/roadmap.md](./docs/roadmap.md) for phases and acceptance criteria.
+Subsystem namespaces on `TpmHandle`. See [docs/api-reference.md](./docs/api-reference.md) for full detail.
 
 | Namespace | Methods |
 |-----------|---------|
 | `tpm.random` | `bytes(n)` ✅ |
-| `tpm.keys` | `create`, `load`, `KeyHandle.sign` ✅ · `decrypt` planned |
+| `tpm.keys` | `create`, `load`, `KeyHandle.sign`, `KeyHandle.decrypt` ✅ |
 | `tpm.pcr` | `extend(index, digest)` |
-| `tpm.seal` | `seal`, `unseal` |
+| `tpm.nv` | `read`, `write` ✅ |
+| `tpm.seal` | `seal`, `unseal` ✅ |
 
 ---
 

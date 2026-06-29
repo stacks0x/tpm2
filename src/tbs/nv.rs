@@ -1,7 +1,7 @@
 //! TPM2 NV_ReadPublic / NV_Read / NV_Write.
 
 use crate::tbs::error::{check_tpm_rc, TpmOpError, TpmResult};
-use crate::tbs::parse::ResponseParser;
+use crate::tbs::parse::{parameters_after_rc, ResponseParser};
 use crate::tbs::read_public::parse_handle;
 use crate::tbs::wire::{
     command_with_handles_and_session, command_with_handles_no_session,
@@ -285,7 +285,8 @@ fn nv_session_auth(
 }
 
 /// Handles + parameters for NV_Read / NV_Write (SAPI layout: nvIndex is handle 2 when
-/// authHandle is a hierarchy; parameter order matches tpm2-tss: size before offset, data before offset).
+/// authHandle is a hierarchy). Write params: data, offset (TSS wire order). Read params:
+/// offset, size (Part 3 order).
 fn nv_access_handles_and_params(
     auth_handle: u32,
     index: u32,
@@ -313,17 +314,28 @@ pub fn nv_read(
     validate_nv_bounds(&info, offset, size as u32, "read")?;
 
     let auth_handle = nv_auth_handle(index, info.attributes, false);
-    // tpm2-tss NV_Read: size then offset (after handles).
+    // Part 3 parameter order (after nvIndex handle): offset, size.
     let mut params = Vec::new();
-    params.extend_from_slice(&size.to_be_bytes());
     params.extend_from_slice(&offset.to_be_bytes());
+    params.extend_from_slice(&size.to_be_bytes());
     let (handles, params) = nv_access_handles_and_params(auth_handle, index, params);
     let session = nv_session_auth(auth_handle, index_auth, owner_auth);
     let cmd = command_with_handles_and_session(&handles, &session, TPM_CC_NV_READ, &params);
     let resp = submit_tpm_command(&cmd).map_err(TpmOpError::transport)?;
     check_tpm_rc(&resp, "NV_Read")?;
-    let mut parser = ResponseParser::after_rc(&resp)?;
-    Ok(parser.read_tpm2b()?)
+    parse_nv_read_response(&resp)
+}
+
+fn parse_nv_read_response(resp: &[u8]) -> TpmResult<Vec<u8>> {
+    parse_nv_read_response_via_parameters(resp).or_else(|_| {
+        let mut parser = ResponseParser::after_rc(resp)?;
+        parser.read_tpm2b()
+    })
+}
+
+fn parse_nv_read_response_via_parameters(resp: &[u8]) -> TpmResult<Vec<u8>> {
+    let mut parser = parameters_after_rc(resp)?;
+    parser.read_tpm2b()
 }
 
 pub fn nv_write(
@@ -376,8 +388,8 @@ mod tests {
     #[test]
     fn nv_read_command_golden_prefix() {
         let mut params = Vec::new();
-        params.extend_from_slice(&64u16.to_be_bytes());
         params.extend_from_slice(&0u16.to_be_bytes());
+        params.extend_from_slice(&64u16.to_be_bytes());
         let cmd = command_with_handles_and_session(
             &[TPM_RH_OWNER, 0x01c0_0002],
             &password_session_null_auth(),
@@ -388,6 +400,22 @@ mod tests {
         assert_eq!(&cmd[6..10], &TPM_CC_NV_READ.to_be_bytes());
         assert_eq!(&cmd[10..14], &TPM_RH_OWNER.to_be_bytes());
         assert_eq!(&cmd[14..18], &0x01c0_0002u32.to_be_bytes());
+    }
+
+    #[test]
+    fn parse_nv_read_response_sessions_no_auth_area() {
+        let payload = b"node-tpm2-nv-read-test!!";
+        let body: u32 = (2 + payload.len()) as u32;
+        let total: u32 = 10 + 4 + body;
+        let mut resp = Vec::new();
+        resp.extend_from_slice(&[0x80, 0x02]);
+        resp.extend_from_slice(&total.to_be_bytes());
+        resp.extend_from_slice(&0u32.to_be_bytes());
+        resp.extend_from_slice(&body.to_be_bytes());
+        resp.extend_from_slice(&(payload.len() as u16).to_be_bytes());
+        resp.extend_from_slice(payload);
+        let got = parse_nv_read_response(&resp).expect("parse");
+        assert_eq!(got, payload);
     }
 
     #[test]

@@ -70,6 +70,8 @@ async function main() {
   const readBack = await tpm.nv.read(handle, 0, payload.length);
   if (!readBack.equals(payload)) {
     console.error('FAIL: read mismatch');
+    console.error('  wrote:', payload.length, payload.toString('hex'));
+    console.error('  read: ', readBack.length, readBack.toString('hex'));
     process.exit(1);
   }
   console.log('PASS  nv.read roundtrip');

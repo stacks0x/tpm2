@@ -1,13 +1,15 @@
 #!/usr/bin/env node
 /**
  * Build all native targets and publish node-tpm2 + platform packages.
- * Prerelease versions (e.g. 0.0.4-beta.0) publish with dist-tag `beta`.
+ * Dist-tag is chosen from package.json version:
+ *   - prerelease (contains `-`) → `beta`
+ *   - stable (e.g. 0.0.5)      → `latest`
  *
  * Auth: use an npm **Automation** token in ~/.npmrc (non-interactive):
  *   //registry.npmjs.org/:_authToken=npm_...
  * Session login (`npm login`) often triggers browser 2FA on publish and fails in scripts.
  *
- * Run: npm run publish:beta
+ * Run: npm run publish:release
  */
 import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -152,7 +154,7 @@ Fix: create an Automation token at https://www.npmjs.com/settings/~/tokens
 Put in ~/.npmrc:
   //registry.npmjs.org/:_authToken=npm_YOUR_TOKEN
 
-Then re-run: npm run publish:beta
+Then re-run: npm run publish:release
 (Platform packages already published can be skipped manually if needed.)
 `);
     process.exit(1);

@@ -75,7 +75,8 @@
     "patch-windows-npm": "node scripts/patch-windows-npm-packages.mjs",
     "prepublishOnly": "napi prepublish -t npm --skip-optional-publish",
     "verify:package": "node scripts/verify-package-tarball.mjs",
-    "publish:beta": "node scripts/publish-beta.mjs"
+    "publish:release": "node scripts/publish-release.mjs",
+    "publish:beta": "node scripts/publish-release.mjs"
   },
   "devDependencies": {
     "@napi-rs/cli": "^3.7.2"

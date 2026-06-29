@@ -76,6 +76,10 @@
     "patch-windows-npm": "node scripts/patch-windows-npm-packages.mjs",
     "prepublishOnly": "napi prepublish -t npm --skip-optional-publish",
     "verify:package": "node scripts/verify-package-tarball.mjs",
+    "bump": "node scripts/bump-version.mjs",
+    "release:preflight": "node scripts/release.mjs preflight",
+    "release:tag": "node scripts/release.mjs tag",
+    "release": "node scripts/release.mjs all",
     "publish:release": "node scripts/publish-release.mjs",
     "publish:beta": "node scripts/publish-release.mjs"
   },
@@ -89,6 +93,8 @@
     "node-tpm2-linux-arm64-gnu": "0.0.6",
     "node-tpm2-linux-x64-musl": "0.0.6",
     "node-tpm2-linux-arm64-musl": "0.0.6",
-    "node-tpm2-darwin-arm64": "0.0.6"
+    "node-tpm2-darwin-arm64": "0.0.6",
+    "node-tpm2-win32-x64-msvc": "0.0.6",
+    "node-tpm2-win32-arm64-msvc": "0.0.6"
   }
 }

@@ -482,7 +482,7 @@ npm run verify:package
 node examples/smoke-test.mjs runtime
 ```
 
-Docs: [getting-started.md](./docs/getting-started.md) · [windows-pcp.md](./docs/windows-pcp.md) · [roadmap.md](./docs/roadmap.md) · [SECURITY.md](./SECURITY.md)
+Docs: [getting-started.md](./docs/getting-started.md) · [windows-pcp.md](./docs/windows-pcp.md) · [roadmap.md](./docs/roadmap.md) · [RELEASE.md](./docs/RELEASE.md) · [SECURITY.md](./SECURITY.md)
 
 Low-level Rust validation: `cargo run --no-default-features --features probe-bin --bin tbs-probe --` (repo only, not published to npm).
 

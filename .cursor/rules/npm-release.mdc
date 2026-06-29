@@ -1,0 +1,16 @@
+---
+description: node-tpm2 release and npm publish — follow docs/RELEASE.md and npm-release skill
+globs:
+alwaysApply: false
+---
+
+# npm release (node-tpm2)
+
+When the user mentions **release, publish, bump version, npm tag, beta, or latest**:
+
+1. Read [docs/RELEASE.md](../../docs/RELEASE.md) and skill `.cursor/skills/npm-release/SKILL.md`.
+2. **Do not publish or push tags** unless explicitly requested in the same message.
+3. Use **`npm run bump -- <version>`** then **`npm run release`** (or step commands) — not ad-hoc version edits.
+4. Git tags: **`v0.0.7`** not `v.0.0.7`.
+5. Beta = version with `-` → npm `@beta`; stable = no `-` → `@latest`.
+6. Preflight uses **`cargo test --lib -- --skip hw_`** — zero TPM contact on dev machine.

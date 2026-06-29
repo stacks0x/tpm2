@@ -142,12 +142,14 @@ export declare interface TpmHandle {
       offset?: number,
       size?: number,
       auth?: Buffer,
+      ownerAuth?: Buffer,
     ): Promise<Buffer>;
     write(
       handle: string | number,
       data: Buffer,
       offset?: number,
       auth?: Buffer,
+      ownerAuth?: Buffer,
     ): Promise<void>;
     define(opts: NvDefineOptions): Promise<void>;
     undefine(handle: string | number, ownerAuth?: Buffer): Promise<void>;
@@ -190,12 +192,14 @@ export declare const Tpm: {
     offset?: number,
     size?: number,
     auth?: Buffer,
+    ownerAuth?: Buffer,
   ): Promise<Buffer>;
   nvWrite(
     handle: string | number,
     data: Buffer,
     offset?: number,
     auth?: Buffer,
+    ownerAuth?: Buffer,
   ): Promise<void>;
   nvReadPublic(handle: string | number): Promise<NvReadPublicResult>;
   nvDefine(opts: NvDefineOptions): Promise<void>;

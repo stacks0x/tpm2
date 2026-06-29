@@ -177,24 +177,26 @@ function createTpmHandle() {
         return native.nvReadPublic(parseTpmHandle(handle));
       }),
 
-      read: wrapNative(async (handle, offset, size, auth) => {
+      read: wrapNative(async (handle, offset, size, auth, ownerAuth) => {
         requireNative('nvRead');
         const buf = await native.nvRead(
           parseTpmHandle(handle),
           offset ?? undefined,
           size ?? undefined,
           auth ?? undefined,
+          ownerAuth ?? undefined,
         );
         return Buffer.from(buf);
       }),
 
-      write: wrapNative(async (handle, data, offset, auth) => {
+      write: wrapNative(async (handle, data, offset, auth, ownerAuth) => {
         requireNative('nvWrite');
         await native.nvWrite({
           handle: parseTpmHandle(handle),
           data,
           offset: offset ?? undefined,
           auth: auth ?? undefined,
+          ownerAuth: ownerAuth ?? undefined,
         });
       }),
 
@@ -420,24 +422,26 @@ export const Tpm = {
     return Buffer.from(plain);
   }),
 
-  nvRead: wrapNative(async (handle, offset, size, auth) => {
+  nvRead: wrapNative(async (handle, offset, size, auth, ownerAuth) => {
     requireNative('nvRead');
     const buf = await native.nvRead(
       parseTpmHandle(handle),
       offset ?? undefined,
       size ?? undefined,
       auth ?? undefined,
+      ownerAuth ?? undefined,
     );
     return Buffer.from(buf);
   }),
 
-  nvWrite: wrapNative(async (handle, data, offset, auth) => {
+  nvWrite: wrapNative(async (handle, data, offset, auth, ownerAuth) => {
     requireNative('nvWrite');
     await native.nvWrite({
       handle: parseTpmHandle(handle),
       data,
       offset: offset ?? undefined,
       auth: auth ?? undefined,
+      ownerAuth: ownerAuth ?? undefined,
     });
   }),
 

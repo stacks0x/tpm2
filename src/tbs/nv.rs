@@ -4,12 +4,11 @@ use crate::tbs::error::{check_tpm_rc, TpmOpError, TpmResult};
 use crate::tbs::parse::ResponseParser;
 use crate::tbs::read_public::parse_handle;
 use crate::tbs::wire::{
-    command, command_with_handles_and_session, command_with_handles_no_session,
-    password_session_auth, tpm2b, tpm2b_empty, u32,
+    command_with_handles_and_session, command_with_handles_no_session,
+    password_session_auth, tpm2b, tpm2b_empty,
 };
 use crate::tbs::submit_tpm_command;
 
-const TPM_ST_NO_SESSIONS: u16 = 0x8001;
 const TPM_CC_NV_READ: u32 = 0x0000_014E;
 const TPM_CC_NV_READ_PUBLIC: u32 = 0x0000_0178;
 const TPM_CC_NV_WRITE: u32 = 0x0000_0137;
@@ -54,7 +53,7 @@ pub fn read_ek_certificate() -> TpmResult<Option<Vec<u8>>> {
             if info.data_size == 0 {
                 return Ok(None);
             }
-            nv_read(index, 0, info.data_size, None, None).map(Some)
+            nv_read(index, 0, info.data_size, None, None, None).map(Some)
         }) {
             Ok(Some(data)) if !data.is_empty() => return Ok(Some(data)),
             Ok(_) => continue,
@@ -273,11 +272,38 @@ fn nv_undefine_absent_ok(err: &TpmOpError) -> bool {
     matches!(err.tpm_rc(), Some(TPM_RC_HANDLE_FMT1) | Some(0x0000_018B))
 }
 
+fn nv_session_auth(
+    auth_handle: u32,
+    index_auth: Option<&[u8]>,
+    owner_auth: Option<&[u8]>,
+) -> Vec<u8> {
+    if auth_handle == TPM_RH_OWNER {
+        password_session_auth(owner_auth.unwrap_or(&[]))
+    } else {
+        password_session_auth(index_auth.unwrap_or(&[]))
+    }
+}
+
+/// Handles + parameters for NV_Read / NV_Write (SAPI layout: nvIndex is handle 2 when
+/// authHandle is a hierarchy; parameter order matches tpm2-tss: size before offset, data before offset).
+fn nv_access_handles_and_params(
+    auth_handle: u32,
+    index: u32,
+    params: Vec<u8>,
+) -> (Vec<u32>, Vec<u8>) {
+    if auth_handle == index {
+        (vec![index], params)
+    } else {
+        (vec![auth_handle, index], params)
+    }
+}
+
 pub fn nv_read(
     index: u32,
     offset: u16,
     size: u16,
-    auth: Option<&[u8]>,
+    index_auth: Option<&[u8]>,
+    owner_auth: Option<&[u8]>,
     info_hint: Option<NvIndexInfo>,
 ) -> TpmResult<Vec<u8>> {
     if size == 0 {
@@ -287,12 +313,13 @@ pub fn nv_read(
     validate_nv_bounds(&info, offset, size as u32, "read")?;
 
     let auth_handle = nv_auth_handle(index, info.attributes, false);
-    let mut body = Vec::new();
-    body.extend_from_slice(&u32(index));
-    body.extend_from_slice(&offset.to_be_bytes());
-    body.extend_from_slice(&size.to_be_bytes());
-    let session = password_session_auth(auth.unwrap_or(&[]));
-    let cmd = command_with_handles_and_session(&[auth_handle], &session, TPM_CC_NV_READ, &body);
+    // tpm2-tss NV_Read: size then offset (after handles).
+    let mut params = Vec::new();
+    params.extend_from_slice(&size.to_be_bytes());
+    params.extend_from_slice(&offset.to_be_bytes());
+    let (handles, params) = nv_access_handles_and_params(auth_handle, index, params);
+    let session = nv_session_auth(auth_handle, index_auth, owner_auth);
+    let cmd = command_with_handles_and_session(&handles, &session, TPM_CC_NV_READ, &params);
     let resp = submit_tpm_command(&cmd).map_err(TpmOpError::transport)?;
     check_tpm_rc(&resp, "NV_Read")?;
     let mut parser = ResponseParser::after_rc(&resp)?;
@@ -303,7 +330,8 @@ pub fn nv_write(
     index: u32,
     offset: u16,
     data: &[u8],
-    auth: Option<&[u8]>,
+    index_auth: Option<&[u8]>,
+    owner_auth: Option<&[u8]>,
     info_hint: Option<NvIndexInfo>,
 ) -> TpmResult<()> {
     if data.is_empty() {
@@ -313,12 +341,13 @@ pub fn nv_write(
     validate_nv_bounds(&info, offset, data.len() as u32, "write")?;
 
     let auth_handle = nv_auth_handle(index, info.attributes, true);
-    let mut body = Vec::new();
-    body.extend_from_slice(&u32(index));
-    body.extend_from_slice(&offset.to_be_bytes());
-    body.extend(tpm2b(data));
-    let session = password_session_auth(auth.unwrap_or(&[]));
-    let cmd = command_with_handles_and_session(&[auth_handle], &session, TPM_CC_NV_WRITE, &body);
+    // tpm2-tss NV_Write: data then offset (after handles).
+    let mut params = Vec::new();
+    params.extend(tpm2b(data));
+    params.extend_from_slice(&offset.to_be_bytes());
+    let (handles, params) = nv_access_handles_and_params(auth_handle, index, params);
+    let session = nv_session_auth(auth_handle, index_auth, owner_auth);
+    let cmd = command_with_handles_and_session(&handles, &session, TPM_CC_NV_WRITE, &params);
     let resp = submit_tpm_command(&cmd).map_err(TpmOpError::transport)?;
     check_tpm_rc(&resp, "NV_Write")?;
     Ok(())
@@ -346,36 +375,52 @@ mod tests {
 
     #[test]
     fn nv_read_command_golden_prefix() {
-        let mut body = Vec::new();
-        body.extend_from_slice(&u32(0x01c0_0002));
-        body.extend_from_slice(&0u16.to_be_bytes());
-        body.extend_from_slice(&64u16.to_be_bytes());
+        let mut params = Vec::new();
+        params.extend_from_slice(&64u16.to_be_bytes());
+        params.extend_from_slice(&0u16.to_be_bytes());
         let cmd = command_with_handles_and_session(
-            &[TPM_RH_OWNER],
+            &[TPM_RH_OWNER, 0x01c0_0002],
             &password_session_null_auth(),
             TPM_CC_NV_READ,
-            &body,
+            &params,
         );
         assert_eq!(&cmd[0..2], &[0x80, 0x02]);
         assert_eq!(&cmd[6..10], &TPM_CC_NV_READ.to_be_bytes());
         assert_eq!(&cmd[10..14], &TPM_RH_OWNER.to_be_bytes());
+        assert_eq!(&cmd[14..18], &0x01c0_0002u32.to_be_bytes());
     }
 
     #[test]
     fn nv_write_command_golden_prefix() {
         let data = b"test";
-        let mut body = Vec::new();
-        body.extend_from_slice(&u32(0x0180_0001));
-        body.extend_from_slice(&0u16.to_be_bytes());
-        body.extend(tpm2b(data));
+        let mut params = Vec::new();
+        params.extend(tpm2b(data));
+        params.extend_from_slice(&0u16.to_be_bytes());
+        let cmd = command_with_handles_and_session(
+            &[TPM_RH_OWNER, 0x0180_0001],
+            &password_session_null_auth(),
+            TPM_CC_NV_WRITE,
+            &params,
+        );
+        assert_eq!(&cmd[6..10], &TPM_CC_NV_WRITE.to_be_bytes());
+        assert_eq!(&cmd[10..14], &TPM_RH_OWNER.to_be_bytes());
+        assert_eq!(&cmd[14..18], &0x0180_0001u32.to_be_bytes());
+    }
+
+    #[test]
+    fn nv_write_index_auth_uses_single_handle() {
+        let data = b"x";
+        let mut params = Vec::new();
+        params.extend(tpm2b(data));
+        params.extend_from_slice(&0u16.to_be_bytes());
         let cmd = command_with_handles_and_session(
             &[0x0180_0001],
             &password_session_null_auth(),
             TPM_CC_NV_WRITE,
-            &body,
+            &params,
         );
-        assert_eq!(&cmd[6..10], &TPM_CC_NV_WRITE.to_be_bytes());
         assert_eq!(&cmd[10..14], &0x0180_0001u32.to_be_bytes());
+        assert_eq!(cmd.len(), 10 + 4 + 4 + 9 + params.len());
     }
 
     #[test]
@@ -386,7 +431,7 @@ mod tests {
 
     #[test]
     fn nv_read_rejects_zero_size() {
-        let err = nv_read(0x01c0_0002, 0, 0, None, None).unwrap_err();
+        let err = nv_read(0x01c0_0002, 0, 0, None, None, None).unwrap_err();
         assert_eq!(err.code(), crate::tbs::codes::INVALID_ARGUMENT);
     }
 
@@ -469,6 +514,29 @@ mod tests {
     fn nv_auth_handle_selects_index_for_authread() {
         let attrs = TPMA_NV_AUTHREAD;
         assert_eq!(nv_auth_handle(0x0180_0001, attrs, false), 0x0180_0001);
+    }
+
+    #[cfg(any(windows, target_os = "linux"))]
+    #[test]
+    fn hw_nv_define_write_read_undefine() {
+        if !crate::tbs::hw_test::enabled() {
+            return;
+        }
+        let index = 0x0180_0043;
+        let _ = nv_undefine(index, None);
+        nv_define(&NvDefineOptions {
+            index,
+            size: 32,
+            attributes: None,
+            index_auth: None,
+            owner_auth: None,
+        })
+        .expect("nv_define");
+        let payload = b"node-tpm2-hw-nv-test!!";
+        nv_write(index, 0, payload, None, None, None).expect("nv_write");
+        let read_back = nv_read(index, 0, payload.len() as u16, None, None, None).expect("nv_read");
+        assert_eq!(read_back, payload);
+        nv_undefine(index, None).expect("nv_undefine");
     }
 
     #[cfg(any(windows, target_os = "linux"))]

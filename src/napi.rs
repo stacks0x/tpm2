@@ -100,6 +100,7 @@ pub struct NvWriteOptionsJs {
     pub data: Buffer,
     pub offset: Option<u32>,
     pub auth: Option<Buffer>,
+    pub owner_auth: Option<Buffer>,
 }
 
 #[napi(object)]
@@ -397,6 +398,7 @@ pub async fn nv_read(
     offset: Option<u32>,
     size: Option<u32>,
     auth: Option<Buffer>,
+    owner_auth: Option<Buffer>,
 ) -> Result<Buffer> {
     #[cfg(not(any(windows, target_os = "linux")))]
     {
@@ -405,7 +407,6 @@ pub async fn nv_read(
     #[cfg(any(windows, target_os = "linux"))]
     {
         let index = crate::tbs::nv::parse_nv_handle(&handle)?;
-        let info = crate::tbs::nv::nv_read_public(index)?;
         let offset = offset.unwrap_or(0);
         if offset > u16::MAX as u32 {
             return Err(TpmOpError::invalid_argument("NV offset exceeds u16 max").into());
@@ -418,6 +419,7 @@ pub async fn nv_read(
                 s as u16
             }
             None => {
+                let info = crate::tbs::nv::nv_read_public(index)?;
                 let end = info.data_size as u32;
                 if offset >= end {
                     return Err(TpmOpError::invalid_argument("NV offset beyond index size").into());
@@ -430,6 +432,7 @@ pub async fn nv_read(
             offset as u16,
             read_size,
             auth.as_ref().map(|b| b.as_ref()),
+            owner_auth.as_ref().map(|b| b.as_ref()),
             None,
         )?;
         Ok(Buffer::from(data))
@@ -454,6 +457,7 @@ pub async fn nv_write(opts: NvWriteOptionsJs) -> Result<()> {
             offset as u16,
             &opts.data,
             opts.auth.as_ref().map(|b| b.as_ref()),
+            opts.owner_auth.as_ref().map(|b| b.as_ref()),
             None,
         )?;
         Ok(())

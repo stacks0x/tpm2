@@ -1,6 +1,6 @@
 {
   "name": "node-tpm2-darwin-arm64",
-  "version": "0.0.5-beta.1",
+  "version": "0.0.5-beta.2",
   "cpu": [
     "arm64"
   ],

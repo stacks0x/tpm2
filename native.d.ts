@@ -55,7 +55,7 @@ export interface NvDefineOptionsJs {
   ownerAuth?: Buffer
 }
 
-export declare function nvRead(handle: string, offset?: number | undefined | null, size?: number | undefined | null, auth?: Buffer | undefined | null): Promise<Buffer>
+export declare function nvRead(handle: string, offset?: number | undefined | null, size?: number | undefined | null, auth?: Buffer | undefined | null, ownerAuth?: Buffer | undefined | null): Promise<Buffer>
 
 export declare function nvReadPublic(handle: string): Promise<NvReadPublicJs>
 
@@ -78,6 +78,7 @@ export interface NvWriteOptionsJs {
   data: Buffer
   offset?: number
   auth?: Buffer
+  ownerAuth?: Buffer
 }
 
 export declare function pcrExtend(index: number, digest: Buffer): Promise<void>

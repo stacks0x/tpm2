@@ -1,5 +1,7 @@
 # node-tpm2
 
+[![Socket Supply Chain](https://socket.dev/api/badge/npm/package/node-tpm2)](https://socket.dev/npm/package/node-tpm2)
+
 Native TPM 2.0 for Node.js. Prebuilt binaries — no `tpm2-tools`, no `tpm2-tss`, no Rust at install time.
 
 Talks to the TPM through OS-native paths: **TBS + Platform Crypto Provider** on Windows, **`/dev/tpmrm0`** on Linux. Returns buffers and typed records, not CLI text.
@@ -460,6 +462,16 @@ Full signatures: [docs/api-reference.md](./docs/api-reference.md).
 
 ---
 
+## Supply chain transparency
+
+This package is a **native TPM binding** (prebuilt `.node` + napi-rs loader). [Socket.dev](https://socket.dev/npm/package/node-tpm2) scores it highly on quality, license, and vulnerability, with a lower **Supply Chain Security** score (~71) that reflects **structural native-module patterns**, not a known defect.
+
+Typical flags: dynamic `require` of platform binaries, filesystem reads for libc detection, env vars (`NAPI_RS_*`), and a **hardcoded** `ldd --version` shell fallback in the generated loader (Linux only, last resort). Each is documented in [SECURITY.md](./SECURITY.md).
+
+We publish the Socket score and the full alert-by-alert accounting voluntarily — see [SECURITY.md](./SECURITY.md) for details and how to report security issues.
+
+---
+
 ## Contributing
 
 ```bash
@@ -470,7 +482,7 @@ npm run verify:package
 node examples/smoke-test.mjs runtime
 ```
 
-Docs: [getting-started.md](./docs/getting-started.md) · [windows-pcp.md](./docs/windows-pcp.md) · [roadmap.md](./docs/roadmap.md)
+Docs: [getting-started.md](./docs/getting-started.md) · [windows-pcp.md](./docs/windows-pcp.md) · [roadmap.md](./docs/roadmap.md) · [SECURITY.md](./SECURITY.md)
 
 Low-level Rust validation: `cargo run --no-default-features --features probe-bin --bin tbs-probe --` (repo only, not published to npm).
 

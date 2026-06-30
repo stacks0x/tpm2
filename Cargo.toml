@@ -1,6 +1,6 @@
 [package]
 name = "node-tpm2"
-version = "0.0.6"
+version = "0.0.7"
 edition = "2021"
 description = "Native TPM 2.0 for Node (Rust backend)"
 license = "Apache-2.0"

@@ -84,7 +84,9 @@ export function assertMainTarball() {
   assertForbidden(files, 'main', MAIN_FORBIDDEN);
   for (const file of files) {
     if (file.startsWith('examples/')) {
-      if (file !== 'examples/smoke-test.mjs' && file !== 'examples/nv-smoke.mjs') {
+      if (file !== 'examples/smoke-test.mjs'
+        && file !== 'examples/nv-smoke.mjs'
+        && file !== 'examples/quote-verify.mjs') {
         throw new Error(`[main] unexpected example in tarball: ${file}`);
       }
       continue;

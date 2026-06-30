@@ -3,6 +3,39 @@
 use crate::tbs::error::{TpmOpError, TpmResult};
 
 const TPM_ST_SESSIONS: u16 = 0x8002;
+const TPM_ALG_ECDSA: u16 = 0x0018;
+const TPM_ALG_RSASSA: u16 = 0x0014;
+const TPM_ALG_RSAPSS: u16 = 0x0016;
+
+/// Convert `TPMT_SIGNATURE` (ECDSA) to IEEE P1363 (r||s, 32+32 bytes) for `crypto.verify`.
+pub fn tpmt_signature_for_verify(wire: &[u8]) -> TpmResult<Vec<u8>> {
+    let mut parser = ResponseParser { data: wire, offset: 0 };
+    let sig_alg = parser.read_u16()?;
+    match sig_alg {
+        TPM_ALG_ECDSA => {
+            let _hash = parser.read_u16()?;
+            let r = parser.read_tpm2b()?;
+            let s = parser.read_tpm2b()?;
+            Ok(ecc_components_to_p1363(&r, &s))
+        }
+        TPM_ALG_RSASSA | TPM_ALG_RSAPSS => {
+            let _hash = parser.read_u16()?;
+            parser.read_tpm2b()
+        }
+        other => Err(TpmOpError::other(format!(
+            "unsupported TPMT_SIGNATURE algorithm 0x{other:04X}"
+        ))),
+    }
+}
+
+fn ecc_components_to_p1363(r: &[u8], s: &[u8]) -> Vec<u8> {
+    let mut out = vec![0u8; 64];
+    let r_off = 32usize.saturating_sub(r.len());
+    let s_off = 32usize.saturating_sub(s.len());
+    out[r_off..32].copy_from_slice(r);
+    out[32 + s_off..64].copy_from_slice(s);
+    out
+}
 
 pub struct ResponseParser<'a> {
     data: &'a [u8],
@@ -68,6 +101,27 @@ impl<'a> ResponseParser<'a> {
     pub fn read_tpm2b(&mut self) -> TpmResult<Vec<u8>> {
         let size = self.read_u16()? as usize;
         Ok(self.read_bytes(size)?.to_vec())
+    }
+
+    /// Raw `TPMT_SIGNATURE` wire (not `TPM2B`-wrapped). Used by Quote and Sign responses.
+    pub fn read_tpmt_signature(&mut self) -> TpmResult<Vec<u8>> {
+        let start = self.offset;
+        let sig_alg = self.read_u16()?;
+        match sig_alg {
+            TPM_ALG_ECDSA | TPM_ALG_RSASSA | TPM_ALG_RSAPSS => {
+                let _hash = self.read_u16()?;
+                let _ = self.read_tpm2b()?;
+                if sig_alg == TPM_ALG_ECDSA {
+                    let _ = self.read_tpm2b()?;
+                }
+            }
+            other => {
+                return Err(TpmOpError::other(format!(
+                    "unsupported TPMT_SIGNATURE algorithm 0x{other:04X}"
+                )));
+            }
+        }
+        Ok(self.data[start..self.offset].to_vec())
     }
 
     pub fn skip_tpm2b(&mut self) -> TpmResult<()> {
@@ -348,6 +402,59 @@ mod tests {
         resp.extend_from_slice(&[0xBBu8; 32]);
         let nonce = start_auth_session_nonce_tpm(&resp).expect("nonce");
         assert_eq!(nonce, vec![0xBB; 32]);
+    }
+
+    #[test]
+    fn quote_tpmt_signature_not_tpm2b() {
+        let mut tpmt = Vec::new();
+        tpmt.extend_from_slice(&TPM_ALG_ECDSA.to_be_bytes());
+        tpmt.extend_from_slice(&0x000bu16.to_be_bytes());
+        let r = [0xB9u8; 32];
+        let s = [0x49u8; 32];
+        tpmt.extend_from_slice(&(r.len() as u16).to_be_bytes());
+        tpmt.extend_from_slice(&r);
+        tpmt.extend_from_slice(&(s.len() as u16).to_be_bytes());
+        tpmt.extend_from_slice(&s);
+
+        let verify = tpmt_signature_for_verify(&tpmt).expect("p1363");
+        assert_eq!(verify.len(), 64);
+        assert_eq!(&verify[..32], &r);
+        assert_eq!(&verify[32..], &s);
+
+        // Regression: mis-parsing as TPM2B treated sigAlg 0x0018 as size 24.
+        let mut wrong = ResponseParser { data: &tpmt, offset: 0 };
+        let truncated = wrong.read_tpm2b().expect("tpm2b");
+        assert_eq!(truncated.len(), 24);
+        assert_eq!(truncated[0..2], [0x00, 0x0b]);
+    }
+
+    #[test]
+    fn read_tpmt_signature_from_mock_quote_response() {
+        let message = b"attest-body";
+        let mut tpmt = Vec::new();
+        tpmt.extend_from_slice(&TPM_ALG_ECDSA.to_be_bytes());
+        tpmt.extend_from_slice(&0x000bu16.to_be_bytes());
+        tpmt.extend_from_slice(&[0x00, 0x04, b'r', b'r', b'r', b'r']);
+        tpmt.extend_from_slice(&[0x00, 0x04, b's', b's', b's', b's']);
+
+        let body_size = (2 + message.len() + tpmt.len()) as u32;
+        let total = 10 + 4 + body_size;
+        let mut resp = Vec::new();
+        resp.extend_from_slice(&[0x80, 0x02]);
+        resp.extend_from_slice(&total.to_be_bytes());
+        resp.extend_from_slice(&0u32.to_be_bytes());
+        resp.extend_from_slice(&body_size.to_be_bytes());
+        resp.extend_from_slice(&(message.len() as u16).to_be_bytes());
+        resp.extend_from_slice(message);
+        resp.extend_from_slice(&tpmt);
+
+        let mut parser = parameters_after_rc(&resp).expect("params");
+        let got_msg = parser.read_tpm2b().expect("message");
+        assert_eq!(got_msg, message);
+        let sig_wire = parser.read_tpmt_signature().expect("tpmt");
+        assert_eq!(sig_wire, tpmt);
+        let verify = tpmt_signature_for_verify(&sig_wire).expect("verify");
+        assert_eq!(verify.len(), 64);
     }
 
     #[test]

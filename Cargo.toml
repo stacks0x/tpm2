@@ -48,6 +48,9 @@ windows = { version = "0.58", features = [
   "Win32_UI_Shell",
 ] }
 
+[dev-dependencies]
+p256 = { version = "0.13", features = ["ecdsa"] }
+
 [build-dependencies]
 napi-build = "2"
 

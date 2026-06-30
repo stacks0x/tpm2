@@ -177,7 +177,8 @@ pub fn sign_digest(sign_handle: u32, digest: &[u8]) -> TpmResult<Vec<u8>> {
     check_tpm_rc(&resp, "Sign")?;
 
     let mut parser = parameters_after_rc(&resp)?;
-    parser.read_tpm2b()
+    let signature_wire = parser.read_tpmt_signature()?;
+    crate::tbs::parse::tpmt_signature_for_verify(&signature_wire)
 }
 
 fn ensure_tbs_key_blob(blob: &AkBlob) -> TpmResult<()> {

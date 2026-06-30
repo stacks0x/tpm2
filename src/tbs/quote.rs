@@ -67,7 +67,8 @@ pub fn quote_with_submit(
 
     let mut parser = parameters_after_rc(&resp)?;
     let message = parser.read_tpm2b()?;
-    let signature = parser.read_tpm2b()?;
+    let signature_wire = parser.read_tpmt_signature()?;
+    let signature = crate::tbs::parse::tpmt_signature_for_verify(&signature_wire)?;
     Ok(QuoteResult {
         message,
         signature,
@@ -138,8 +139,28 @@ mod tests {
             .expect("quote");
         assert!(!result.message.is_empty());
         assert!(!result.signature.is_empty());
+        assert_eq!(
+            result.signature.len(),
+            64,
+            "Linux ECDSA quote should export IEEE P1363 (64 bytes)"
+        );
 
         let extra = attest_extra_data(&result.message).expect("extraData in TPMS_ATTEST");
         assert_eq!(extra, qualifying.as_slice());
+
+        #[cfg(target_os = "linux")]
+        verify_quote_ecdsa(&blob.public, &result.message, &result.signature);
+    }
+
+    #[cfg(target_os = "linux")]
+    fn verify_quote_ecdsa(public_wire: &[u8], message: &[u8], signature: &[u8]) {
+        use p256::ecdsa::{signature::Verifier, Signature, VerifyingKey};
+        use p256::pkcs8::DecodePublicKey;
+
+        let spki =
+            crate::tbs::read_public::public_wire_to_spki_der(public_wire).expect("spki");
+        let vk = VerifyingKey::from_public_key_der(&spki).expect("verifying key");
+        let sig = Signature::from_bytes(signature.into()).expect("signature bytes");
+        vk.verify(message, &sig).expect("quote signature must verify");
     }
 }

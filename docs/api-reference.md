@@ -186,7 +186,7 @@ type QuoteResult = { message: Buffer; signature: Buffer };
 | Field | Meaning |
 |-------|---------|
 | `message` | Raw **TPMS_ATTEST** structure from `TPM2_Quote` — send to your verifier for parsing |
-| `signature` | Signature over `message` using the AK (ECDSA-SHA256 on Linux; RSASSA-SHA256 on Windows PCP RSA AK) |
+| `signature` | ECDSA-SHA256 (Linux): **IEEE P1363** (64 bytes, r‖s) over `message`. RSASSA-SHA256 (Windows PCP RSA AK): raw RSA signature bytes from the TPM. |
 
 Also pass `akPublicDer` (from provisioning) and `pcrSelection` / `qualifyingData` to the verifier out-of-band.
 
@@ -644,7 +644,7 @@ Returned by `tpm.keys.create()` and `tpm.keys.load()`.
 |-----------|---------|
 | `digest` | **Exactly 32 bytes** — SHA-256 hash of message |
 
-**Returns:** TPM2B signature wire bytes (DER-encoded signature inside).
+**Returns:** For ECC keys, **IEEE P1363** (64-byte r‖s) suitable for Node `crypto.verify`. For RSA keys, raw RSA signature bytes from the TPM.
 
 **Use for:** Proof-of-possession, document signing with device key.
 

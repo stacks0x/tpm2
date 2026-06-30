@@ -10,7 +10,8 @@ use crate::tbs::wire::{
 use crate::tbs::submit_tpm_command;
 
 const TPM_CC_NV_READ: u32 = 0x0000_014E;
-const TPM_CC_NV_READ_PUBLIC: u32 = 0x0000_0178;
+// Part 3 / tpm2-tss: NV_ReadPublic = 0x169 (not 0x178 — that is ECC_Parameters).
+const TPM_CC_NV_READ_PUBLIC: u32 = 0x0000_0169;
 const TPM_CC_NV_WRITE: u32 = 0x0000_0137;
 const TPM_CC_NV_DEFINE_SPACE: u32 = 0x0000_012A;
 const TPM_CC_NV_UNDEFINE_SPACE: u32 = 0x0000_0122;
@@ -37,6 +38,7 @@ const OWNER_NV_INDEX_MAX: u32 = 0x01BF_FFFF;
 /// Standard EK certificate NV indices (TCG provisioning).
 const EK_CERT_INDICES: [u32; 2] = [0x01c0_0002, 0x01c0_000A];
 
+#[derive(Clone, Copy)]
 pub struct NvIndexInfo {
     pub data_size: u16,
     pub attributes: u32,
@@ -47,13 +49,16 @@ pub fn parse_nv_handle(handle: &str) -> TpmResult<u32> {
     parse_handle(handle)
 }
 
+/// Maximum bytes per `NV_Read` (TPM2_PT_NV_BUFFER_MAX; all implementations allow at least 1024).
+const MAX_NV_READ_BYTES: u16 = 1024;
+
 pub fn read_ek_certificate() -> TpmResult<Option<Vec<u8>>> {
     for &index in &EK_CERT_INDICES {
         match nv_read_public(index).and_then(|info| {
             if info.data_size == 0 {
                 return Ok(None);
             }
-            nv_read(index, 0, info.data_size, None, None, None).map(Some)
+            nv_read_entire(index, info, None, None).map(Some)
         }) {
             Ok(Some(data)) if !data.is_empty() => return Ok(Some(data)),
             Ok(_) => continue,
@@ -62,6 +67,26 @@ pub fn read_ek_certificate() -> TpmResult<Option<Vec<u8>>> {
         }
     }
     Ok(None)
+}
+
+/// Read an entire NV index, chunking at [`MAX_NV_READ_BYTES`] per TPM2_PT_NV_BUFFER_MAX.
+fn nv_read_entire(
+    index: u32,
+    info: NvIndexInfo,
+    index_auth: Option<&[u8]>,
+    owner_auth: Option<&[u8]>,
+) -> TpmResult<Vec<u8>> {
+    let hint = Some(info);
+    let mut out = Vec::with_capacity(info.data_size as usize);
+    let mut offset = 0u16;
+    while offset < info.data_size {
+        let remaining = info.data_size - offset;
+        let chunk = remaining.min(MAX_NV_READ_BYTES);
+        let data = nv_read(index, offset, chunk, index_auth, owner_auth, hint)?;
+        out.extend_from_slice(&data);
+        offset = offset.saturating_add(chunk);
+    }
+    Ok(out)
 }
 
 pub fn nv_read_public(index: u32) -> TpmResult<NvIndexInfo> {
@@ -182,10 +207,13 @@ fn nv_auth_handle(index: u32, attributes: u32, for_write: bool) -> u32 {
     } else {
         TPMA_NV_PPREAD
     };
-    if attributes & auth_bit != 0 {
-        index
-    } else if attributes & (owner_bit | pp_bit) != 0 {
+    // Prefer hierarchy auth when available. Factory indices (e.g. EK cert) often set
+    // AUTHREAD|OWNERREAD|PPREAD; STM TPMs reject index-only auth (TPM_RC_VALUE ~0x284)
+    // even though Part 3 allows it — owner + empty password matches tpm2_nvread -C o.
+    if attributes & (owner_bit | pp_bit) != 0 {
         TPM_RH_OWNER
+    } else if attributes & auth_bit != 0 {
+        index
     } else {
         index
     }
@@ -376,8 +404,60 @@ mod tests {
     #[test]
     fn nv_read_public_command_golden() {
         let cmd = command_with_handles_no_session(&[0x01c0_0002], TPM_CC_NV_READ_PUBLIC, &[]);
-        assert_eq!(&cmd[6..10], &[0x00, 0x00, 0x01, 0x78]);
+        assert_eq!(cmd.len(), 14);
+        assert_eq!(&cmd[0..2], &[0x80, 0x01]); // TPM_ST_NO_SESSIONS
+        assert_eq!(u32::from_be_bytes([cmd[2], cmd[3], cmd[4], cmd[5]]), 14);
+        assert_eq!(&cmd[6..10], &[0x00, 0x00, 0x01, 0x69]);
         assert_eq!(&cmd[10..14], &[0x01, 0xc0, 0x00, 0x02]);
+    }
+
+    #[test]
+    fn parse_nv_read_public_with_param_size_prefix() {
+        let mut nv_public = Vec::new();
+        nv_public.extend_from_slice(&0x01c0_0002u32.to_be_bytes());
+        nv_public.extend_from_slice(&TPM_ALG_SHA256.to_be_bytes());
+        nv_public.extend_from_slice(&0x0200_0000u32.to_be_bytes()); // attributes
+        nv_public.extend(tpm2b_empty()); // authPolicy
+        nv_public.extend_from_slice(&1035u16.to_be_bytes()); // dataSize
+        let nv_name = vec![0x0B, 0xAB, 0xCD];
+        let param_len = 2 + nv_public.len() + 2 + nv_name.len();
+        let total = 10 + 4 + param_len;
+        let mut resp = Vec::new();
+        resp.extend_from_slice(&[0x80, 0x01]);
+        resp.extend_from_slice(&(total as u32).to_be_bytes());
+        resp.extend_from_slice(&0u32.to_be_bytes());
+        resp.extend_from_slice(&(param_len as u32).to_be_bytes());
+        resp.extend_from_slice(&(nv_public.len() as u16).to_be_bytes());
+        resp.extend_from_slice(&nv_public);
+        resp.extend_from_slice(&(nv_name.len() as u16).to_be_bytes());
+        resp.extend_from_slice(&nv_name);
+        let info = parse_nv_read_public_fields(&resp).expect("parse");
+        assert_eq!(info.data_size, 1035);
+        assert_eq!(info.attributes, 0x0200_0000);
+    }
+
+    #[test]
+    fn parse_nv_read_public_direct_tpm2b_at_offset_10() {
+        let mut nv_public = Vec::new();
+        nv_public.extend_from_slice(&0x01c0_0002u32.to_be_bytes());
+        nv_public.extend_from_slice(&TPM_ALG_SHA256.to_be_bytes());
+        nv_public.extend_from_slice(&0x0200_0000u32.to_be_bytes());
+        nv_public.extend(tpm2b_empty());
+        nv_public.extend_from_slice(&512u16.to_be_bytes());
+        let nv_name = vec![0x0B, 0x01, 0x02];
+        let param_len = 2 + nv_public.len() + 2 + nv_name.len();
+        let total = 10 + param_len;
+        let mut resp = Vec::new();
+        resp.extend_from_slice(&[0x80, 0x01]);
+        resp.extend_from_slice(&(total as u32).to_be_bytes());
+        resp.extend_from_slice(&0u32.to_be_bytes());
+        resp.extend_from_slice(&(nv_public.len() as u16).to_be_bytes());
+        resp.extend_from_slice(&nv_public);
+        resp.extend_from_slice(&(nv_name.len() as u16).to_be_bytes());
+        resp.extend_from_slice(&nv_name);
+        let info = parse_nv_read_public_fields(&resp).expect("parse");
+        assert_eq!(info.data_size, 512);
+        assert_eq!(info.attributes, 0x0200_0000);
     }
 
     #[test]
@@ -568,9 +648,31 @@ mod tests {
     }
 
     #[test]
-    fn nv_auth_handle_selects_index_for_authread() {
+    fn nv_auth_handle_prefers_owner_when_ownerread_and_authread() {
+        let attrs = TPMA_NV_AUTHREAD | TPMA_NV_OWNERREAD | TPMA_NV_PPREAD;
+        assert_eq!(nv_auth_handle(0x01c0_0002, attrs, false), TPM_RH_OWNER);
+    }
+
+    #[test]
+    fn nv_auth_handle_selects_index_for_authread_only() {
         let attrs = TPMA_NV_AUTHREAD;
         assert_eq!(nv_auth_handle(0x0180_0001, attrs, false), 0x0180_0001);
+    }
+
+    #[test]
+    fn nv_read_entire_chunks_at_nv_buffer_max() {
+        let info = NvIndexInfo {
+            data_size: 1035,
+            attributes: DEFAULT_NV_DEFINE_ATTRIBUTES,
+        };
+        let mut offsets = Vec::new();
+        let mut offset = 0u16;
+        while offset < info.data_size {
+            let chunk = (info.data_size - offset).min(MAX_NV_READ_BYTES);
+            offsets.push((offset, chunk));
+            offset = offset.saturating_add(chunk);
+        }
+        assert_eq!(offsets, vec![(0, 1024), (1024, 11)]);
     }
 
     #[cfg(any(windows, target_os = "linux"))]
@@ -579,6 +681,19 @@ mod tests {
         if !crate::tbs::hw_test::enabled() {
             return;
         }
-        let _ = read_ek_certificate();
+        let info = nv_read_public(0x01c0_0002).expect("NV_ReadPublic on EK cert index");
+        assert!(info.data_size > 0, "EK cert NV index should report non-zero dataSize");
+        let cert = read_ek_certificate().expect("read_ek_certificate");
+        match cert {
+            Some(bytes) => assert!(!bytes.is_empty(), "EK cert DER should not be empty"),
+            None => {
+                // Alternate TCG index may be provisioned instead of 0x01c00002.
+                let alt = nv_read_public(0x01c0_000A);
+                assert!(
+                    alt.map(|i| i.data_size > 0).unwrap_or(false),
+                    "neither standard EK cert NV index is provisioned"
+                );
+            }
+        }
     }
 }

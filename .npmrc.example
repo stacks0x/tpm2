@@ -1,3 +1,9 @@
-# Copy to .npmrc and set your token (or paste token directly into .npmrc).
-# .npmrc is gitignored; this file is the template.
+# Per-project npm auth — copy to .npmrc (gitignored):
+#
+#   cp .npmrc.example .npmrc
+#   # edit .npmrc and paste your Automation token
+#
+# Use an npm Automation token (not `npm login`). Keeps publish credentials
+# isolated to this repo instead of ~/.npmrc.
+#
 //registry.npmjs.org/:_authToken=npm_xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx

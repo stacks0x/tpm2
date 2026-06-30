@@ -5,7 +5,7 @@
  *   - prerelease (contains `-`) → `beta`
  *   - stable (e.g. 0.0.5)      → `latest`
  *
- * Auth: use an npm **Automation** token in ~/.npmrc (non-interactive):
+ * Auth: use an npm **Automation** token in project .npmrc (see .npmrc.example):
  *   //registry.npmjs.org/:_authToken=npm_...
  * Session login (`npm login`) often triggers browser 2FA on publish and fails in scripts.
  *
@@ -22,6 +22,12 @@ import {
 } from './verify-package-tarball.mjs';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
+const projectNpmrc = join(root, '.npmrc');
+// npm only auto-loads project .npmrc when cwd is the repo root; platform packages
+// live under npm/* and publish with cwd there, so pass --userconfig explicitly.
+const npmUserConfig = existsSync(projectNpmrc)
+  ? ` --userconfig ${JSON.stringify(projectNpmrc)}`
+  : '';
 const version = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).version;
 const distTag = version.includes('-') ? 'beta' : 'latest';
 
@@ -89,10 +95,12 @@ function stageArtifact(target, nodeFile) {
 }
 
 try {
-  run('npm whoami');
+  run(`npm whoami${npmUserConfig}`);
+  // whoami from repo root can succeed while publish from npm/* subdirs fails without --userconfig
+  run(`npm whoami${npmUserConfig}`, { cwd: join(root, 'npm') });
 } catch {
   console.error('\nNot logged in to npm.');
-  console.error('Add an Automation token to ~/.npmrc:');
+  console.error('Add an Automation token to project .npmrc (cp .npmrc.example .npmrc):');
   console.error('  //registry.npmjs.org/:_authToken=npm_...');
   process.exit(1);
 }
@@ -145,13 +153,18 @@ for (const dir of readdirSync(join(root, 'npm'))) {
     continue;
   }
   try {
-    run(`npm publish --access public --tag ${distTag}`, { cwd: pkgDir });
+    run(`npm publish --access public --tag ${distTag}${npmUserConfig}`, { cwd: pkgDir });
   } catch {
     console.error(`
-Publish failed (often npm browser 2FA on session login).
+Publish failed.
 
-Fix: create an Automation token at https://www.npmjs.com/settings/~/tokens
-Put in ~/.npmrc:
+Common causes:
+  - npm login session (auth-type=web) — use Automation token in project .npmrc instead
+  - missing project .npmrc — cp .npmrc.example .npmrc and paste token
+  - ENEEDAUTH from npm/* subdirs — fixed by --userconfig in this script; update and re-run
+
+Fix: Automation token at https://www.npmjs.com/settings/~/tokens
+Project .npmrc:
   //registry.npmjs.org/:_authToken=npm_YOUR_TOKEN
 
 Then re-run: npm run publish:release
@@ -161,6 +174,6 @@ Then re-run: npm run publish:release
   }
 }
 
-run(`npm publish --access public --tag ${distTag}`);
+run(`npm publish --access public --tag ${distTag}${npmUserConfig}`);
 
 console.log(`\nDone. Install with: npm install node-tpm2@${version}`);

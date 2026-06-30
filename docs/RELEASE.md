@@ -13,10 +13,56 @@ One workflow for **beta** and **stable** releases. npm dist-tag is chosen automa
 
 ## Prerequisites (once)
 
-- **npm:** Automation token in `~/.npmrc` (`//registry.npmjs.org/:_authToken=npm_...`)
-- **Build tools:** Rust, `@napi-rs/cli`, `cargo-xwin` (Windows cross), `zig` + `cargo-zigbuild` (Linux musl/arm) — same as today
-- **Publish machine:** your Linux dev box (`fortress`) — not the Windows test laptop
-- **On `main`:** version bump committed; branch matches what you intend to ship
+- **npm:** Automation token in **project `.npmrc`** (gitignored — `cp .npmrc.example .npmrc`). Per-repo isolation; do not put publish tokens in `~/.npmrc`. Do **not** run `npm login`.
+
+---
+
+## npm publish asks for OTP (EOTP) even with Automation token
+
+**Cause:** leftover **`npm login` session** — npm config shows `auth-type=web` and `_auth=(protected)`. Publish uses web auth (OTP); `npm whoami` may still work via token.
+
+**Fix (once):**
+
+```bash
+npm logout
+npm config delete auth-type
+```
+
+Ensure **project** `.npmrc` in repo root (from `.npmrc.example`):
+
+```
+//registry.npmjs.org/:_authToken=npm_YOUR_AUTOMATION_TOKEN
+```
+
+Remove publish auth from `~/.npmrc` if present (avoid two tokens fighting). Clear session login:
+
+```bash
+npm logout
+npm config delete auth-type
+```
+
+Verify:
+
+```bash
+npm config get auth-type    # should be empty or undefined, NOT "web"
+npm config get _auth          # should be empty
+npm whoami                    # stacks0x
+```
+
+Then publish:
+
+```bash
+npm run release:publish
+npm run release:tag
+```
+
+**ENEEDAUTH on platform packages:** `npm whoami` from repo root can succeed while `npm publish` from `npm/linux-*` fails. npm does not apply project `.npmrc` auth in those subdirs. `scripts/publish-release.mjs` passes `--userconfig` on every publish; for manual platform publishes use:
+
+```bash
+npm publish --access public --userconfig /path/to/tpm2/.npmrc
+```
+
+Do **not** run `npm login` again on this machine.
 
 ---
 

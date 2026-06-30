@@ -514,7 +514,7 @@ dependencies = [
 
 [[package]]
 name = "node-tpm2"
-version = "0.0.7"
+version = "0.0.8"
 dependencies = [
  "aes",
  "cfb-mode",

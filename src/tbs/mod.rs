@@ -17,6 +17,7 @@ pub mod properties;
 pub mod quote;
 pub mod random;
 pub mod rc;
+pub mod response_buf;
 pub mod seal;
 pub mod read_public;
 pub mod session_hmac;

@@ -51,4 +51,21 @@ for (const [from, to] of Object.entries(RENAMES)) {
 }
 writeFileSync(nativePath, native)
 
+// Warn on optional-binding version skew; throw only when NAPI_RS_ENFORCE_VERSION_CHECK is set.
+const pkgVersion = rootPkg.version
+const versionCheckNeedle = `if (bindingPackageVersion !== '${pkgVersion}' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK`
+const versionCheckReplacement = `if (bindingPackageVersion !== '${pkgVersion}') {
+          if (typeof process !== 'undefined' && process.emitWarning) {
+            process.emitWarning(
+              \`[node-tpm2] optional binding version \${bindingPackageVersion} !== ${pkgVersion}; run npm install or npm run build\`,
+              { type: 'node-tpm2', code: 'NATIVE_BINDING_VERSION' },
+            )
+          }
+        }
+        if (bindingPackageVersion !== '${pkgVersion}' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK`
+if (native.includes(versionCheckNeedle)) {
+  native = native.replaceAll(versionCheckNeedle, versionCheckReplacement)
+  writeFileSync(nativePath, native)
+}
+
 console.log('Patched Windows npm package names: win32-* -> windows-*')

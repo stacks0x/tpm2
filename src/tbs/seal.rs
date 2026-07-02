@@ -73,14 +73,7 @@ impl PolicySession {
     }
 }
 
-fn flush_stale_policy_sessions() {
-    for slot in 0x10..0x40u32 {
-        let _ = flush_handle(0x0300_0000 | slot);
-    }
-}
-
 fn start_policy_session() -> TpmResult<PolicySession> {
-    flush_stale_policy_sessions();
     let nonce_caller = random_nonce_32();
     let cmd = start_auth_session_policy(&nonce_caller);
     let resp = submit_tpm_command(&cmd).map_err(TpmOpError::transport)?;

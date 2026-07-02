@@ -16,6 +16,10 @@ const TPM_PT_VENDOR_STRING_1: u32 = 0x0000_0106;
 const TPM_PT_VENDOR_STRING_2: u32 = 0x0000_0107;
 const TPM_PT_VENDOR_STRING_3: u32 = 0x0000_0108;
 const TPM_PT_VENDOR_STRING_4: u32 = 0x0000_0109;
+/// Part 2 Table 21 — max single NV_Read size (bytes).
+pub const TPM_PT_NV_BUFFER_MAX: u32 = 0x0000_0113;
+/// Part 2 Table 21 — max TPM response size (bytes).
+pub const TPM_PT_MAX_RESPONSE_SIZE: u32 = 0x0000_0114;
 
 #[derive(Debug, Clone)]
 pub struct FixedProperties {
@@ -27,19 +31,7 @@ pub struct FixedProperties {
 }
 
 pub fn read_fixed_properties() -> Result<FixedProperties, String> {
-    let mut body = Vec::new();
-    body.extend_from_slice(&u32(TPM_CAP_TPM_PROPERTIES));
-    body.extend_from_slice(&u32(1)); // first property tag
-    body.extend_from_slice(&u32(64)); // property count
-    let cmd = command(TPM_ST_NO_SESSIONS, TPM_CC_GET_CAPABILITY, &body);
-
-    let resp = submit_tpm_command(&cmd)?;
-    let rc = tpm_rc_from_response(&resp).ok_or("short GetCapability response")?;
-    if rc != 0 {
-        return Err(format!("GetCapability failed 0x{rc:08X}"));
-    }
-
-    let props = parse_tpm_properties(&resp)?;
+    let props = read_tpm_properties_map()?;
     let manufacturer = four_cc(props.get(&TPM_PT_MANUFACTURER).copied().unwrap_or(0));
     let vendor = vendor_string(&props);
     Ok(FixedProperties {
@@ -51,6 +43,42 @@ pub fn read_fixed_properties() -> Result<FixedProperties, String> {
         is_virtual: is_virtual_tpm(&manufacturer, &vendor),
         spec: format_spec(props.get(&TPM_PT_FAMILY_INDICATOR).copied()),
     })
+}
+
+/// Fixed TPM properties from one `GetCapability` call (tags `0x100`, count 64).
+pub fn read_tpm_properties_map() -> Result<std::collections::HashMap<u32, u32>, String> {
+    let mut body = Vec::new();
+    body.extend_from_slice(&u32(TPM_CAP_TPM_PROPERTIES));
+    body.extend_from_slice(&u32(1)); // starting property (TPM returns PT_FIXED set from 0x100)
+    body.extend_from_slice(&u32(64));
+    let cmd = command(TPM_ST_NO_SESSIONS, TPM_CC_GET_CAPABILITY, &body);
+
+    let resp = submit_tpm_command(&cmd)?;
+    let rc = tpm_rc_from_response(&resp).ok_or("short GetCapability response")?;
+    if rc != 0 {
+        return Err(format!("GetCapability failed 0x{rc:08X}"));
+    }
+
+    parse_tpm_properties(&resp)
+}
+
+/// `TPM_PT_NV_BUFFER_MAX` when advertised; otherwise 1024 (TPM 2.0 minimum).
+pub fn nv_buffer_max_bytes(props: &std::collections::HashMap<u32, u32>) -> u16 {
+    props
+        .get(&TPM_PT_NV_BUFFER_MAX)
+        .copied()
+        .filter(|v| *v > 0)
+        .map(|v| v.min(u16::MAX as u32) as u16)
+        .unwrap_or(1024)
+}
+
+/// `TPM_PT_MAX_RESPONSE_SIZE` when advertised; at least 4096 for TBS/io buffers.
+pub fn max_response_buffer_bytes(props: &std::collections::HashMap<u32, u32>) -> usize {
+    props
+        .get(&TPM_PT_MAX_RESPONSE_SIZE)
+        .copied()
+        .map(|v| (v as usize).max(4096))
+        .unwrap_or(4096)
 }
 
 /// Heuristic virtual-TPM detection (not authoritative; reviewers use it as a hint).
@@ -173,5 +201,18 @@ mod tests {
         assert!(is_virtual_tpm("IBM ", ""));
         assert!(is_virtual_tpm("STM ", "swtpm"));
         assert!(!is_virtual_tpm("STM ", "STMicroelectronics"));
+    }
+
+    #[test]
+    fn nv_buffer_max_defaults_to_1024_when_missing() {
+        let props = std::collections::HashMap::new();
+        assert_eq!(nv_buffer_max_bytes(&props), 1024);
+    }
+
+    #[test]
+    fn nv_buffer_max_reads_pt_tag() {
+        let mut props = std::collections::HashMap::new();
+        props.insert(TPM_PT_NV_BUFFER_MAX, 512);
+        assert_eq!(nv_buffer_max_bytes(&props), 512);
     }
 }

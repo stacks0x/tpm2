@@ -8,6 +8,8 @@ use windows::Win32::System::TpmBaseServices::{
     TBS_COMMAND_PRIORITY_NORMAL, TBS_CONTEXT_PARAMS, TBS_CONTEXT_PARAMS2,
 };
 
+use crate::tbs::response_buf::tpm_response_buffer_capacity;
+
 pub struct TbsContext {
     handle: *mut c_void,
 }
@@ -44,26 +46,36 @@ impl TbsContext {
 /// Submit a TPM command through an existing TBS context (caller-owned; not closed here).
 ///
 /// PCP `PCP_PLATFORMHANDLE` returns a context where persisted key handles are visible.
+/// Windows TBS: `TBS_E_INSUFFICIENT_BUFFER` (0x80284005).
+const TBS_E_INSUFFICIENT_BUFFER: u32 = 0x8028_4005;
+
 pub fn submit_to_context(context: *mut c_void, cmd: &[u8]) -> Result<Vec<u8>, String> {
     if context.is_null() {
         return Err("TBS context is null".to_string());
     }
-    unsafe {
-        let mut resp = vec![0u8; 4096];
+    let mut capacity = tpm_response_buffer_capacity();
+    loop {
+        let mut resp = vec![0u8; capacity];
         let mut resp_len: u32 = resp.len() as u32;
-        let rc = Tbsip_Submit_Command(
-            context,
-            TBS_COMMAND_LOCALITY_ZERO,
-            TBS_COMMAND_PRIORITY_NORMAL,
-            cmd,
-            resp.as_mut_ptr(),
-            &mut resp_len,
-        );
-        if rc != 0 {
-            return Err(format!("Tbsip_Submit_Command -> 0x{rc:08X}"));
+        let rc = unsafe {
+            Tbsip_Submit_Command(
+                context,
+                TBS_COMMAND_LOCALITY_ZERO,
+                TBS_COMMAND_PRIORITY_NORMAL,
+                cmd,
+                resp.as_mut_ptr(),
+                &mut resp_len,
+            )
+        };
+        if rc == 0 {
+            resp.truncate(resp_len as usize);
+            return Ok(resp);
         }
-        resp.truncate(resp_len as usize);
-        Ok(resp)
+        if rc == TBS_E_INSUFFICIENT_BUFFER && capacity < 65_536 {
+            capacity = capacity.saturating_mul(2);
+            continue;
+        }
+        return Err(format!("Tbsip_Submit_Command -> 0x{rc:08X}"));
     }
 }
 

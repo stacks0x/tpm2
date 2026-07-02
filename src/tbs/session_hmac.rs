@@ -59,6 +59,11 @@ pub fn compute_auth_hmac(
 }
 
 pub fn policy_session_auth_area(input: SessionAuthInput<'_>) -> Vec<u8> {
+    debug_assert_eq!(
+        input.session_key,
+        unbound_unsalted_session_key(),
+        "policy_session_auth_area expects unbound unsalted session (empty sessionKey)"
+    );
     let cp_hash = compute_cp_hash(input.command_code, input.handle_names, input.params);
     let auth_hmac = compute_auth_hmac(
         input.session_key,

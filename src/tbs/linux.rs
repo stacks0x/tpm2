@@ -5,6 +5,8 @@ use std::io::{Read, Write};
 use std::path::Path;
 use std::sync::Mutex;
 
+use crate::tbs::response_buf::tpm_response_buffer_capacity;
+
 const TPM_DEVICE: &str = "/dev/tpmrm0";
 
 /// One open `/dev/tpmrm0` per process. Transient handles are scoped to the connection,
@@ -36,7 +38,7 @@ pub fn submit_tpm_command(cmd: &[u8]) -> Result<Vec<u8>, String> {
         .write_all(cmd)
         .map_err(|e| format!("write {TPM_DEVICE}: {e}"))?;
 
-    let mut resp = vec![0u8; 4096];
+    let mut resp = vec![0u8; tpm_response_buffer_capacity()];
     let n = device
         .read(&mut resp)
         .map_err(|e| format!("read {TPM_DEVICE}: {e}"))?;

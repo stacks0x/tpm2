@@ -148,6 +148,10 @@ vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 .vite/
 
+# Local TPM policy/session blobs from manual tpm2-tools probes (never commit)
+policy
+*.ctx
+
 # Maintainer planning docs (local only — not in git, not on npm)
 /docs/dev/
 

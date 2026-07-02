@@ -86,12 +86,6 @@ impl EkHandle {
     }
 }
 
-fn flush_stale_policy_sessions() {
-    for slot in 0x10..0x40u32 {
-        let _ = flush_handle(0x0300_0000 | slot);
-    }
-}
-
 fn start_policy_session_after_flush() -> TpmResult<PolicySession> {
     let nonce_caller = random_nonce_32();
     let cmd = start_auth_session_policy(&nonce_caller);
@@ -197,7 +191,6 @@ fn resolve_ek_public_wire() -> TpmResult<Vec<u8>> {
 /// Platform EK authPolicy is typically `PolicySecret(endorsement)` only; the AK requires
 /// `PolicySecret + PolicyCommandCode(ActivateCredential)` (Part 3 §12.3 auth indices 1 and 2).
 fn activate_policy_sessions() -> TpmResult<(PolicySession, PolicySession)> {
-    flush_stale_policy_sessions();
     let mut ek = start_policy_session_after_flush()?;
     policy_secret(&mut ek, TPM_RH_ENDORSEMENT)?;
 

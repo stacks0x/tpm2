@@ -7,7 +7,7 @@ use hmac::{Hmac, Mac};
 use rand::RngCore;
 use rsa::oaep::Oaep;
 use rsa::{BigUint, RsaPublicKey};
-use sha2::Sha256;
+use sha2::{Digest, Sha256};
 
 type Aes128CfbEnc = Encryptor<aes::Aes128>;
 
@@ -15,6 +15,9 @@ const TPM_ALG_RSA: u16 = 0x0001;
 const TPM_ALG_AES: u16 = 0x0006;
 const TPM_ALG_CFB: u16 = 0x0043;
 const TPM_ALG_SHA256: u16 = 0x000B;
+
+/// TCG Part 1 §B.10.4 — OAEP label for identity seed (includes terminating NUL).
+pub const IDENTITY_OAEP_LABEL: &[u8] = b"IDENTITY\0";
 
 struct EkRsaPublic {
     name_alg: u16,
@@ -134,7 +137,7 @@ fn encrypt_seed_identity(ek: &EkRsaPublic, seed: &[u8]) -> TpmResult<Vec<u8>> {
     let n = BigUint::from_bytes_be(&ek.modulus);
     let pubkey = RsaPublicKey::new(n, exp)
         .map_err(|e| TpmOpError::other(format!("invalid RSA EK public key: {e}")))?;
-    let padding = Oaep::new_with_label::<Sha256, _>("IDENTITY");
+    let padding = Oaep::new_with_label::<Sha256, _>("IDENTITY\0");
     let mut rng = rand::thread_rng();
     let encrypted = pubkey
         .encrypt(&mut rng, padding, seed)
@@ -190,7 +193,7 @@ fn hmac_block(hash_alg: u16, key: &[u8], data: &[u8]) -> TpmResult<Vec<u8>> {
             Ok(mac.finalize().into_bytes().to_vec())
         }
         other => Err(TpmOpError::other(format!(
-            "unsupported hash algorithm 0x{other:04X}"
+            "software MakeCredential requires SHA-256 nameAlg (0x000B); got 0x{other:04X}"
         ))),
     }
 }
@@ -211,7 +214,7 @@ fn hash_size(alg: u16) -> TpmResult<usize> {
     match alg {
         TPM_ALG_SHA256 => Ok(32),
         other => Err(TpmOpError::other(format!(
-            "unsupported nameAlg 0x{other:04X}"
+            "software MakeCredential requires SHA-256 nameAlg (0x000B); got 0x{other:04X}"
         ))),
     }
 }
@@ -272,4 +275,30 @@ fn skip_rsa_scheme(data: &[u8], off: usize, end: usize) -> TpmResult<usize> {
         o += 2;
     }
     Ok(o)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sha2::Sha256;
+
+    #[test]
+    fn identity_oaep_label_is_nine_bytes_with_nul() {
+        assert_eq!(IDENTITY_OAEP_LABEL, b"IDENTITY\0");
+        assert_eq!(IDENTITY_OAEP_LABEL.len(), 9);
+    }
+
+    #[test]
+    fn identity_oaep_label_hash_matches_tpm() {
+        let digest: [u8; 32] = Sha256::digest(IDENTITY_OAEP_LABEL).into();
+        // Pin OAEP label bytes — regressions must not drop the TPM NUL terminator.
+        assert_eq!(
+            digest,
+            [
+                0xd3, 0x12, 0x05, 0x40, 0xc0, 0x33, 0xc7, 0x2e, 0x87, 0x25, 0xf5, 0x74, 0xf7,
+                0x60, 0x7c, 0xb7, 0x49, 0xf1, 0x3f, 0x8c, 0x97, 0xcb, 0xcb, 0x46, 0x9e, 0x3c,
+                0xdf, 0x07, 0xa0, 0x80, 0x88, 0x99,
+            ]
+        );
+    }
 }

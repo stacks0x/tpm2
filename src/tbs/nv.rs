@@ -1,5 +1,7 @@
 //! TPM2 NV_ReadPublic / NV_Read / NV_Write.
 
+use std::sync::OnceLock;
+
 use crate::tbs::error::{check_tpm_rc, TpmOpError, TpmResult};
 use crate::tbs::parse::{parameters_after_rc, ResponseParser};
 use crate::tbs::read_public::parse_handle;
@@ -49,8 +51,15 @@ pub fn parse_nv_handle(handle: &str) -> TpmResult<u32> {
     parse_handle(handle)
 }
 
-/// Maximum bytes per `NV_Read` (TPM2_PT_NV_BUFFER_MAX; all implementations allow at least 1024).
-const MAX_NV_READ_BYTES: u16 = 1024;
+/// Per-TPM max bytes per `NV_Read` (`TPM_PT_NV_BUFFER_MAX`, minimum 1024).
+fn max_nv_read_bytes() -> u16 {
+    static MAX: OnceLock<u16> = OnceLock::new();
+    *MAX.get_or_init(|| {
+        crate::tbs::properties::read_tpm_properties_map()
+            .map(|m| crate::tbs::properties::nv_buffer_max_bytes(&m))
+            .unwrap_or(1024)
+    })
+}
 
 pub fn read_ek_certificate() -> TpmResult<Option<Vec<u8>>> {
     for &index in &EK_CERT_INDICES {
@@ -69,7 +78,7 @@ pub fn read_ek_certificate() -> TpmResult<Option<Vec<u8>>> {
     Ok(None)
 }
 
-/// Read an entire NV index, chunking at [`MAX_NV_READ_BYTES`] per TPM2_PT_NV_BUFFER_MAX.
+/// Read an entire NV index, chunking at `max_nv_read_bytes()` per TPM2_PT_NV_BUFFER_MAX.
 fn nv_read_entire(
     index: u32,
     info: NvIndexInfo,
@@ -81,7 +90,7 @@ fn nv_read_entire(
     let mut offset = 0u16;
     while offset < info.data_size {
         let remaining = info.data_size - offset;
-        let chunk = remaining.min(MAX_NV_READ_BYTES);
+        let chunk = remaining.min(max_nv_read_bytes());
         let data = nv_read(index, offset, chunk, index_auth, owner_auth, hint)?;
         out.extend_from_slice(&data);
         offset = offset.saturating_add(chunk);
@@ -668,7 +677,7 @@ mod tests {
         let mut offsets = Vec::new();
         let mut offset = 0u16;
         while offset < info.data_size {
-            let chunk = (info.data_size - offset).min(MAX_NV_READ_BYTES);
+            let chunk = (info.data_size - offset).min(1024);
             offsets.push((offset, chunk));
             offset = offset.saturating_add(chunk);
         }
